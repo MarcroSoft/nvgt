@@ -59,7 +59,7 @@ function setup_nvgt {
 	fi
 	
 	echo Downloading macosdev...
-	curl -s -O https://nvgt.gg/macosdev.tar.gz
+	curl -s -O https://marcrosoft.org/macosdev.tar.gz
 	mkdir -p macosdev
 	cd macosdev
 	tar -xvf ../macosdev.tar.gz
