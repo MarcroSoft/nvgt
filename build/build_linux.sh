@@ -101,7 +101,7 @@ function setup_nvgt {
 	fi
 	
 	echo Downloading lindev...
-	wget https://nvgt.gg/lindev.tar.gz
+	wget https://marcrosoft.org/lindev.tar.gz
 	mkdir -p lindev
 	cd lindev
 	tar -xvf ../lindev.tar.gz
