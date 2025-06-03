@@ -77,7 +77,7 @@ jobs:
         cd ..
     - name: build
       run: |
-        curl -s -O https://nvgt.gg/droidev.zip
+        curl -s -O https://marcrosoft.org/droidev.zip
         mkdir -p droidev
         cd droidev
         unzip -q ../droidev.zip
