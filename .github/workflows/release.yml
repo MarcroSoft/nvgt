@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   mac_build:
+    if: false
     runs-on: macos-14
     steps:
     - uses: actions/checkout@v4
@@ -29,6 +30,7 @@ jobs:
         path: 'release'
 
   linux_build:
+    if: false
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -89,6 +91,7 @@ jobs:
         path: 'release'
 
   windows_build:
+    if: false
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
