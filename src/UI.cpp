@@ -374,7 +374,7 @@ uint64_t idle_ticks() {
 		io_registry_entry_t entry;
 		CFMutableDictionaryRef matching = IOServiceMatching("IOHIDSystem");
 		if (!matching) return -1;
-		kern_return_t kr = IOServiceGetMatchingServices(                                                                kIOMasterPortDefault, matching, &iter);
+		kern_return_t kr = IOServiceGetMatchingServices(                                                                kIOMainPortDefault, matching, &iter);
 		if (kr != KERN_SUCCESS) return -1;
 		entry = IOIteratorNext(iter);
 		IOObjectRelease(iter);
