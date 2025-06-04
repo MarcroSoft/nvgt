@@ -48,7 +48,7 @@ else:
 	env.Append(CXXFLAGS = ["-fms-extensions", "-std=c++20", "-fpermissive", "-O0" if ARGUMENTS.get("debug", 0) == "1" else "-O3", "-Wno-narrowing", "-Wno-int-to-pointer-cast", "-Wno-delete-incomplete", "-Wno-unused-result", "-g" if ARGUMENTS.get("debug", 0) == "1" else "", "-Wall" if ARGUMENTS.get("warnings", "0") == "1" else "", "-Wextra" if ARGUMENTS.get("warnings", "0") == "1" else "", "-Werror" if ARGUMENTS.get("warnings_as_errors", "0") == "1" else ""], LIBS = ["m"])
 if env["PLATFORM"] == "darwin":
 	# homebrew paths and other libraries/flags for MacOS
-	env.Append(CCFLAGS = ["-mmacosx-version-min=14.0", "-arch", "arm64", "-arch", "x86_64"], LINKFLAGS = ["-arch", "arm64", "-arch", "x86_64"])
+	env.Append(CCFLAGS = ["-mmacosx-version-min=11.0", "-arch", "arm64", "-arch", "x86_64"], LINKFLAGS = ["-arch", "arm64", "-arch", "x86_64"])
 	# The following, to say the least, is absolutely not ideal. In some cases we have both static and dynamic libraries on the system and must explicitly choose the static one. The normal :libname.a trick doesn't seem to work on clang, we're just informed that libs couldn't be found. If anybody knows a better way to force static library linkage on MacOS particularly without the absolute paths, please let me know!
 	env.Append(LIBS = ["angelscript", "SDL3", "crypto", "ssl", "iconv", "ogg", "vorbis", "vorbisfile", "opusfile", "opus"])
 elif env["PLATFORM"] == "posix":
@@ -104,7 +104,7 @@ elif env["PLATFORM"] == "darwin":
 	env["FRAMEWORKPREFIX"] = "-weak_framework"
 	env.Append(FRAMEWORKS = ["CoreAudio",  "CoreFoundation", "CoreHaptics", "CoreMedia", "CoreVideo", "AudioToolbox", "AVFoundation", "AppKit", "IOKit", "Carbon", "Cocoa", "ForceFeedback", "GameController", "QuartzCore", "Metal", "UniformTypeIdentifiers"])
 	env.Append(LIBS = ["objc"])
-	env.Append(LINKFLAGS = ["-Wl,-rpath,'@loader_path',-rpath,'@loader_path/lib',-rpath,'@loader_path/../Frameworks',-dead_strip_dylibs", "-mmacosx-version-min=14.0"])
+	env.Append(LINKFLAGS = ["-Wl,-rpath,'@loader_path',-rpath,'@loader_path/lib',-rpath,'@loader_path/../Frameworks',-dead_strip_dylibs", "-mmacosx-version-min=11.0"])
 elif env["PLATFORM"] == "posix":
 	env.Append(LINKFLAGS = ["-Wl,-rpath,'$$ORIGIN/.',-rpath,'$$ORIGIN/lib'"])
 	# Libvorbis must appear in the library link order after deps on Linux.
