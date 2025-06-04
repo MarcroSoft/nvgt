@@ -179,7 +179,7 @@ void getMacHash(unsigned short& mac1, unsigned short& mac2) {
 unsigned long long getSystemSerialNumberHash() {
 	unsigned long long hash = 0;
 	unsigned char* phash = (unsigned char*)&hash;
-	io_service_t platformExpert = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
+	io_service_t platformExpert = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("IOPlatformExpertDevice"));
 	if (!platformExpert) return 0;
 	CFTypeRef t = IORegistryEntryCreateCFProperty(platformExpert, CFSTR(kIOPlatformSerialNumberKey), kCFAllocatorDefault, 0);
 	CFStringRef serialNumber = (CFStringRef)t;
