@@ -66,6 +66,7 @@
 #include "system_fingerprint.h"
 #include "threading.h"
 #include "timestuff.h"
+#include "tonesynth.h"
 #include "tts.h"
 #include "version.h"
 #include "xplatform.h"
@@ -404,6 +405,9 @@ int PreconfigureEngine(asIScriptEngine* engine) {
 	RegisterScriptDatastreams(engine);
 	engine->EndConfigGroup();
 	engine->RegisterObjectType("pack_interface", 0, asOBJ_REF);
+	engine->RegisterObjectType("json_object", 0, asOBJ_REF);
+	engine->RegisterObjectType("json_array", 0, asOBJ_REF);
+	engine->RegisterObjectType("var", 0, asOBJ_REF);
 	return 0;
 }
 // Registrations in the following function are usually done in alphabetical order, with some exceptions involving one subsystem depending on another. For example the internet subsystem registers functions that take timespans, meaning that timestuff gets registered before internet.
@@ -486,6 +490,9 @@ int ConfigureEngine(asIScriptEngine *engine) {
 	system_namespace("sound");
 	RegisterSoundsystem(engine);
 	system_namespace();
+	engine->EndConfigGroup();
+	engine->BeginConfigGroup("tonesynth");
+	RegisterScriptTonesynth(engine);
 	engine->EndConfigGroup();
 	engine->SetDefaultAccessMask(NVGT_SUBSYSTEM_UNCLASSIFIED);
 	engine->BeginConfigGroup("system_fingerprint");
