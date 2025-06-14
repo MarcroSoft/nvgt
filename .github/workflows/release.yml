@@ -165,7 +165,7 @@ jobs:
         cp -r windows_release/lib release/lib_windows
         cp windows_release/stub/* release/stub
         cd install
-        python3 make_dmg.py ../release
+        python3 make_macos_app.py ../release
     - uses: actions/upload-artifact@v4
       with:
         name: mac_package
