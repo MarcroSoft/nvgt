@@ -27,7 +27,13 @@
 		},
 		{
 			"name": "sdl3",
-			"features": ["vulkan"]
+			"features": ["vulkan"],
+			"platform": "windows|osx|ios|android"
+		},
+		{
+			"name": "sdl3",
+			"platform": "linux",
+			"features": ["vulkan", "ibus", "wayland", "x11"]
 		},
 		{
 			"name": "freetype",
