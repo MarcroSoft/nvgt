@@ -1,7 +1,7 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO anjo76/angelscript
-    REF 4337ba1f6dc0e6d07fead6fc17a4cd3ee059eee6
+    REF 17703bb13cbcd15120b5bc59321c4ed9300ddf7b
     SHA512 bb2b0595425f1ea09f5e1cd24dfa6885fa95bf67d95f7f2c5a1bc46e92e202f9e72d3eaa6945e54dae43ef3a09c18c0b32be8278af4822eaf6415cd2167cdb65
     HEAD_REF master
     PATCHES
