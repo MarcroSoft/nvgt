@@ -1119,7 +1119,7 @@ public:
 		if (mix == parent_mixer)
 			return false;
 		if (parent_mixer) {
-			parent_mixer->release();
+//			parent_mixer->release();
 			parent_mixer = nullptr;
 		}
 		if (mix) {
