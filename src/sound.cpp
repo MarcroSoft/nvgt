@@ -1094,7 +1094,7 @@ public:
 			spatializer->release();
 		}
 		if (parent_mixer)
-			parent_mixer->release();
+//			parent_mixer->release();
 		if (node_chain)
 			node_chain->release();
 		if (effects_chain)
