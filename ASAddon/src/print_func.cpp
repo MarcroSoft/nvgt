@@ -164,7 +164,7 @@ void Print::PrintTemplate(std::ostream & dst, void const* objPtr, int typeId, in
 
         for(uint32_t i = 0; i < enumValueCount; ++i)
         {
-            int val;
+            asINT64 val;
             const char * text = typeInfo->GetEnumValueByIndex(i, &val);
 
             if(val == value)

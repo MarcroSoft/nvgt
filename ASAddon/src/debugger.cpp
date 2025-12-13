@@ -83,7 +83,7 @@ string CDebugger::ToString(void *value, asUINT typeId, int expandMembers, asIScr
 			asITypeInfo *t = engine->GetTypeInfoById(typeId);
 			for( int n = t->GetEnumValueCount(); n-- > 0; )
 			{
-				int enumVal;
+				asINT64 enumVal;
 				const char *enumName = t->GetEnumValueByIndex(n, &enumVal);
 				if( enumVal == *(int*)value )
 				{
@@ -269,7 +269,8 @@ bool CDebugger::CheckBreakPoint(asIScriptContext *ctx)
 			else if( m_breakPoints[n].needsAdjusting &&
 					 m_breakPoints[n].name == file )
 			{
-				int line = func->FindNextLineWithCode(m_breakPoints[n].lineNbr);
+//				int line = func->FindNextLineWithCode(m_breakPoints[n].lineNbr);
+				int line = 0;
 				if( line >= 0 )
 				{
 					m_breakPoints[n].needsAdjusting = false;
