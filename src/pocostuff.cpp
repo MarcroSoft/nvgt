@@ -240,6 +240,16 @@ bool string_ends_with(std::string* str, const std::string& value) {
 	return endsWith<std::string>(*str, value);
 }
 
+Path path_op_div(const Path* base, const Path& other) {
+	if (other.isAbsolute()) return other;
+	Path result(*base);
+	return result.append(other);
+}
+
+Path path_op_div_string(const Path* base, const std::string& other) {
+	Path other_path(other);
+	return path_op_div(base, other_path);
+}
 
 // Function wrappers for poco var, since we can't register overloaded functions within a class using composition in Angelscript. Sorry, this as well as the below angelscript registration just sucks and I'm not currently clever enough to combine templates and macros to get around all of the horror. Part of me wonders if I should have registered var as a value type or something, but I wish for handles to be supported!
 poco_shared<Dynamic::Var>* poco_var_assign_var(poco_shared<Dynamic::Var>* var, const poco_shared<Dynamic::Var>& val) {
@@ -646,10 +656,10 @@ void RegisterPocostuff(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("var", "bool get_is_numeric() const property", asMETHOD(Dynamic::Var, isNumeric), asCALL_THISCALL, 0, asOFFSET(poco_shared<Dynamic::Var>, ptr), true);
 	engine->RegisterObjectMethod("var", "bool get_is_boolean() const property", asMETHOD(Dynamic::Var, isBoolean), asCALL_THISCALL, 0, asOFFSET(poco_shared<Dynamic::Var>, ptr), true);
 	engine->RegisterObjectMethod("var", "bool get_is_string() const property", asMETHOD(Dynamic::Var, isString), asCALL_THISCALL, 0, asOFFSET(poco_shared<Dynamic::Var>, ptr), true);
-	engine->RegisterObjectBehaviour("var", asBEHAVE_FACTORY, "var @v(json_object@)", asFUNCTION(poco_var_factory_value_shared<JSON::Object>), asCALL_CDECL);
+	engine->RegisterObjectBehaviour("var", asBEHAVE_FACTORY, "var @v(const json_object&in)", asFUNCTION(poco_var_factory_value_shared<JSON::Object>), asCALL_CDECL);
 	engine->RegisterObjectMethod("var", "var& opAssign(const json_object&in) const", asFUNCTION(poco_var_assign_shared<JSON::Object>), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod("var", "json_object@ opImplCast() const", asFUNCTION(poco_var_extract_shared<JSON::Object>), asCALL_CDECL_OBJFIRST);
-	engine->RegisterObjectBehaviour("var", asBEHAVE_FACTORY, "var @v(json_array@)", asFUNCTION(poco_var_factory_value_shared<JSON::Array>), asCALL_CDECL);
+	engine->RegisterObjectBehaviour("var", asBEHAVE_FACTORY, "var @v(const json_array&in)", asFUNCTION(poco_var_factory_value_shared<JSON::Array>), asCALL_CDECL);
 	engine->RegisterObjectMethod("var", "var& opAssign(const json_array&in) const", asFUNCTION(poco_var_assign_shared<JSON::Array>), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod("var", "json_array@ opImplCast() const", asFUNCTION(poco_var_extract_shared<JSON::Array>), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectBehaviour("json_object", asBEHAVE_FACTORY, "json_object @o()", asFUNCTION(poco_json_object_factory), asCALL_CDECL);
@@ -869,6 +879,8 @@ void RegisterPocostuff(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("path", _O("path& assign_directory(const string&in, path_style)"), asMETHODPR(Path, parseDirectory, (const std::string&, Path::Style), Path&), asCALL_THISCALL);
 	engine->RegisterObjectMethod("path", _O("bool parse(const string&in)"), asMETHODPR(Path, tryParse, (const std::string&), bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod("path", _O("bool parse(const string&in, path_style)"), asMETHODPR(Path, tryParse, (const std::string&, Path::Style), bool), asCALL_THISCALL);
+	engine->RegisterObjectMethod("path", _O("path opDiv(const path&in) const"), asFUNCTION(path_op_div), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod("path", _O("path opDiv(const string&in) const"), asFUNCTION(path_op_div_string), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod("path", _O("string opImplConv() const"), asMETHODPR(Path, toString, () const, std::string), asCALL_THISCALL);
 	engine->RegisterObjectMethod("path", _O("string to_string(path_style = spec::PATH_STYLE_NATIVE) const"), asMETHODPR(Path, toString, (Path::Style) const, std::string), asCALL_THISCALL);
 	engine->RegisterObjectMethod("path", _O("path& make_directory()"), asMETHOD(Path, makeDirectory), asCALL_THISCALL);
