@@ -58,7 +58,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt full-upgrade -y
-        sudo apt install -y build-essential libtool mesa-common-dev libxext-dev libxcursor-dev ladspa-sdk libxcomposite-dev libsystemd-dev autoconf libxxf86vm-dev libgl1-mesa-dev libxinerama-dev libx11-dev libltdl-dev libgtk-4-dev libglib2.0-dev libspeechd-dev libudev-dev linux-libc-dev libxrandr-dev libxrender-dev libwayland-dev pkg-config xorg-dev libglu1-mesa-dev libxft-dev libgsasl-dev clang python3-jinja2 zip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        sudo apt install -y build-essential libtool mesa-common-dev libxext-dev libxcursor-dev ladspa-sdk libxcomposite-dev libsystemd-dev autoconf libxxf86vm-dev libgl1-mesa-dev libxinerama-dev libx11-dev libltdl-dev libgtk-4-dev libglib2.0-dev libspeechd-dev libudev-dev linux-libc-dev libxrandr-dev libxrender-dev libwayland-dev pkg-config xorg-dev libglu1-mesa-dev libxft-dev libgsasl-dev clang python3-jinja2 zip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu autoconf autoconf-archive automake libtool
         python3 vcpkg/build_dependencies.py --archive
     - name: publish dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event.repository.fork == false }}
@@ -87,14 +87,17 @@ jobs:
         java-version: '17'
         cache: 'gradle'
     - uses: nttld/setup-ndk@v1
+      id: setup-ndk
       with:
-        ndk-version: r25c
+        ndk-version: r25b
         link-to-sdk: true
         add-to-path: true
+    - name: set ndk environ
+      run: echo "ANDROID_NDK_HOME=${{steps.setup-ndk.outputs.ndk-path}}" >> $GITHUB_ENV
     - uses: actions/cache@v4
       with:
         path: droidev
-        key: droidev-${{ hashFiles('vcpkg/ports/**', 'vcpkg/triplets/**', 'vcpkg/*.json', '.git/modules/vcpkg/bin/HEAD') }}
+        key: droidev-${{ hashFiles('.github/workflows/release.yml', 'vcpkg/ports/**', 'vcpkg/triplets/**', 'vcpkg/*.json', '.git/modules/vcpkg/bin/HEAD') }}
       id: cache
     - name: build dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}

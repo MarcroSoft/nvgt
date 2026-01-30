@@ -351,7 +351,7 @@ int WriteConfigToStream(asIScriptEngine *engine, ostream &strm)
 			strm << "access " << hex << (unsigned int)(accessMask) << dec << "\n";
 			currAccessMask = accessMask;
 		}
-//		strm << "typedef " << ti->GetName() << " \"" << engine->GetTypeDeclaration(ti->GetTypedefTypeId()) << "\"\n";
+		strm << "typedef " << ti->GetName() << " \"" << engine->GetTypeDeclaration(ti->GetUnderlyingTypeId()) << "\"\n";
 	}
 
 	c = engine->GetFuncdefCount();

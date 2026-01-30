@@ -158,7 +158,7 @@ void Print::PrintTemplate(std::ostream & dst, void const* objPtr, int typeId, in
     auto enumValueCount = typeInfo->GetEnumValueCount();
     if(enumValueCount)
     {
-        int value = *(uint32_t const*)objPtr;
+        asINT64 value = *(asINT64 const*)objPtr;
 
         dst << typeInfo->GetName();
 
