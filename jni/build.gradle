@@ -36,7 +36,12 @@ android {
 			}
 		}
 	}
-	buildTypes {
+packagingOptions {
+    jniLibs {
+        useLegacyPackaging = true
+    }
+}	
+buildTypes {
 		release {
 			minifyEnabled false
 			crunchPngs false
