@@ -4,6 +4,7 @@
 		"fast-float",
 		"libflac",
 		"libffi",
+		"miniaudio",
 		"miniupnpc",
 		"libobfuscate",
 		"libogg",
@@ -106,5 +107,5 @@
 			]
 		}
 	],
-	"builtin-baseline": "7213cf8135c329c37c7e2778e40774489a0583a8"
+"builtin-baseline": "3895230f38e498525f2560a281223d12066fa74a"
 }
