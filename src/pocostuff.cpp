@@ -16,6 +16,7 @@
 #include <string>
 #include <angelscript.h>
 #include <obfuscate.h>
+#include <aswrappedcall.h>
 #include <scriptarray.h>
 // Poco includes:
 #include <Poco/Base32Decoder.h>
@@ -712,8 +713,8 @@ void RegisterPocostuff(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("json_array", "bool is_array(uint index)", asMETHOD(poco_json_array, is_array), asCALL_THISCALL);
 	engine->RegisterObjectMethod("json_array", "bool is_null(uint index)", asMETHOD(poco_json_array, is_null), asCALL_THISCALL);
 	engine->RegisterObjectMethod("json_array", "bool is_object(uint index)", asMETHOD(poco_json_array, is_object), asCALL_THISCALL);
-	engine->RegisterGlobalFunction("var@ parse_json(const string&in payload)", asFUNCTION(json_parse), asCALL_CDECL);
-	engine->RegisterGlobalFunction("var@ parse_json(datastream@ stream)", asFUNCTION(json_parse_datastream), asCALL_CDECL);
+	engine->RegisterGlobalFunction("var@ parse_json(const string&in payload)", WRAP_FN(json_parse), asCALL_GENERIC);
+	engine->RegisterGlobalFunction("var@ parse_json(datastream@ stream)", WRAP_FN(json_parse_datastream), asCALL_GENERIC);
 	engine->RegisterGlobalFunction(_O("string string_to_hex(const string& in binary)"), asFUNCTION(string_to_hex), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("string hex_to_string(const string& in hex)"), asFUNCTION(hex_to_string), asCALL_CDECL);
 	engine->RegisterEnum("string_base64_options");

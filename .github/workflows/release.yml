@@ -329,7 +329,7 @@ jobs:
         mkdir android_package
         mv android_release/nvgt.apk android_package/nvgt_$nvgt_version.apk
     - name: publish
-      uses: "marvinpinto/action-automatic-releases@v1.2.1"
+      uses: "marvinpinto/action-automatic-releases@latest"
       with:
         repo_token: "${{ secrets.GITHUB_TOKEN }}"
         prerelease: true

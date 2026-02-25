@@ -62,10 +62,10 @@ def build(triplet = "", do_archive = False, out_dir = ""):
 			h.update(f.read())
 			hf.write(h.hexdigest())
 def macos_fat_binaries(out_dir):
-	"""We must manually build libffi and openssl for x64 as well and then run lipo on both of our builds to create universal binaries for them. This is meant to be run after the macosdev directory is created."""
-	try: subprocess.check_output([vcpkg_path, "install", "--classic", "--triplet", "x64-osx", "--overlay-ports=" + str(Path(__file__).parent / "ports"), "--overlay-triplets=" + str(Path(__file__).parent / "triplets"), "libffi", "openssl"])
-	except subprocess.CalledProcessError as cpe: sys.exit(f"Building libffi and openssl for x64-osx failed with error code {cpe.returncode}.\n{cpe.output.decode()}")
-	for f in ["libcrypto.a", "libffi.a", "libssl.a"]:
+	"""We must manually build Angelscript, libffi and openssl for x64 as well and then run lipo on both of our builds to create universal binaries for them. This is meant to be run after the macosdev directory is created. We basically need to do this for libraries that contain assembly instructions, because the Clang fat builds of such libraries either fail or break down when running NVGT."""
+	try: subprocess.check_output([vcpkg_path, "install", "--classic", "--triplet", "x64-osx", "--overlay-ports=" + str(Path(__file__).parent / "ports"), "--overlay-triplets=" + str(Path(__file__).parent / "triplets"), "angelscript", "libffi", "openssl"])
+	except subprocess.CalledProcessError as cpe: sys.exit(f"Building angelscript libffi and openssl for x64-osx failed with error code {cpe.returncode}.\n{cpe.output.decode()}")
+	for f in ["libangelscript.a", "libcrypto.a", "libffi.a", "libssl.a"]:
 		(out_dir / "debug" / "lib" / f).unlink()
 		(out_dir / "lib" / f).unlink()
 		subprocess.check_output(["lipo", "-create", vcpkg_path.parent / "installed" / "x64-osx" / "debug" / "lib" / f, vcpkg_installed_path / "arm64-osx" / "debug" / "lib" / f, "-output", out_dir / "debug" / "lib" / f])
