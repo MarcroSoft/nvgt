@@ -91,7 +91,7 @@ if len(static_plugins) > 0:
 		static_plugins_object = env.Object(static_plugins_path, static_plugins_path + ".cpp", CPPPATH = env["CPPPATH"] + ["#src"])
 
 # Project libraries
-env.Append(LIBS = ["PocoJSON", "PocoNet", "PocoNetSSL", "PocoUtil", "PocoXML", "PocoCrypto", "PocoZip", "PocoFoundation", "expat", "z", "angelscript", "SDL3", "phonon", "enet", "reactphysics3d", "ssl", "crypto", "utf8proc", "pcre2-8", "ASAddon", "deps", "vorbisfile", "vorbisenc", "vorbis", "ogg", "opusfile", "opusenc", "opus", "tinyexpr", "tiny-aes-c"])
+env.Append(LIBS = ["PocoJSON", "PocoNet", "PocoNetSSL", "PocoUtil", "PocoXML", "PocoCrypto", "PocoZip", "PocoFoundation", "expat", "z", "angelscript", "SDL3", "SDL3_ttf", "freetype", "bz2", "phonon", "enet", "reactphysics3d", "ssl", "crypto", "utf8proc", "pcre2-8", "ASAddon", "deps", "vorbisfile", "vorbisenc", "vorbis", "ogg", "opusfile", "opusenc", "opus", "tinyexpr", "tiny-aes-c"])
 if env["PLATFORM"] == "win32": env.Append(LIBS = ["UniversalSpeechStatic"])
 
 # nvgt itself
@@ -184,7 +184,7 @@ if ARGUMENTS.get("no_stubs", "0") == "0":
 		stublibs = list(stub_env["LIBS"])
 		if "angelscript" in stublibs:
 			stublibs.remove("angelscript")
-			stublibs.append("angelscript-nc")
+			stublibs.append("angelscript_nc")
 			if ARGUMENTS.get("debug", "0") == "1": stub_env["PDB"] = "#build/debug/nvgt_windows_nc.pdb"
 			stub_nc = stub_env.Program(f"release/stub/nvgt_{stub_platform}_nc", stub_objects, LIBS = stublibs)
 			stub_env.AddPostAction(stub_nc, fix_stub)
