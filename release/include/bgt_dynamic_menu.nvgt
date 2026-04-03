@@ -149,8 +149,6 @@ class dynamic_menu {
 			} else
 				@internal_tts = tts_handle;
 		}
-		int stick_aim = 0;
-		int stick_last_aim = 0;
 		if (intro != "") {
 			if (is_intro_tts == true) {
 				if (speech_output > 0 and speech_output < 5) {
@@ -267,22 +265,7 @@ class dynamic_menu {
 			}
 			act = false;
 
-			// Determine where the joystick is aimed.
-			if (@stick != null) {
-				if (stick.y < -150)
-					stick_aim = 1; // Up.
-				else if (stick.y > 150)
-					stick_aim = 2; // Down.
-				else
-					stick_aim = 0;
-				if (stick_aim == 0)
-					stick_last_aim = 0;
-				if (stick_last_aim != 0)
-					stick_aim = 0;
-				else
-					stick_last_aim = stick_aim;
-			}
-			if (key_pressed(KEY_UP) or stick_aim == 1) {
+			if (key_pressed(KEY_UP) or stick.button_pressed(11)) {
 				initial = false;
 				if (menu_position == 0) {
 					menu_position = item_count;
@@ -301,7 +284,7 @@ class dynamic_menu {
 				speak_item = true;
 				continue;
 			}
-			if (key_pressed(KEY_DOWN) or stick_aim == 2) {
+			if (key_pressed(KEY_DOWN) or stick.button_pressed(12)) {
 				initial = false;
 				if (menu_position == item_count) {
 					if (wrap == true) {
