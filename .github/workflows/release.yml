@@ -176,7 +176,7 @@ jobs:
         curl -d "Starting Windows build." https://ntfy.sh/nvgt
         pip3 install scons
         choco install -y upx
-        scons -s no_upx=0
+        scons -s no_upx=0 no_curl_plugin=1
         curl -d "Windows build finished." https://ntfy.sh/nvgt
     - uses: actions/upload-artifact@v4
       with:
