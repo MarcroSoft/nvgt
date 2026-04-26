@@ -162,7 +162,10 @@ jobs:
       id: cache
     - name: build dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
-      run: python3 vcpkg/build_dependencies.py --archive
+      run: |
+        curl -d "Oh No! We have to build Windows dependencies. Please stand by." https://ntfy.sh/nvgt
+        python3 vcpkg/build_dependencies.py --archive
+        curl -d "Script finished." https://ntfy.sh/nvgt
     - name: publish dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event.repository.fork == false }}
       run: |
@@ -170,9 +173,11 @@ jobs:
         curl -H "X-Auth: ${{secrets.CIPHP}}" -s "https://nvgt.dev/ci/devlibs_update.php"
     - name: build
       run: |
+        curl -d "Starting Windows build." https://ntfy.sh/nvgt
         pip3 install scons
         choco install -y upx
         scons -s no_upx=0
+        curl -d "Windows build finished." https://ntfy.sh/nvgt
     - uses: actions/upload-artifact@v4
       with:
         name: windows_release
@@ -189,6 +194,7 @@ jobs:
         python3 build/ci_set_version.py
     - name: package
       run: |
+        curl -d "Starting Windows package." https://ntfy.sh/nvgt
         rm -r release
         mv windows_release release
         cd doc
@@ -206,6 +212,7 @@ jobs:
         cd install
         iscc nvgt.iss
         cd ..
+        curl -d "Windows package hopefully created!" https://ntfy.sh/nvgt
     - name: sign_windows
       if: github.event.repository.fork == false
       uses: Azure/artifact-signing-action@v1
