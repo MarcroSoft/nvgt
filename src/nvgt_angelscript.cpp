@@ -756,7 +756,7 @@ int LoadCompiledScript(asIScriptEngine *engine, unsigned char* code, asUINT size
 	codestream.set(code, size);
 	nvgt_bytecode_istream istr(&codestream);
 	BinaryReader br(istr);
-	load_serialized_nvgt_plugins(br);
+	if (!load_serialized_nvgt_plugins(br)) return -1;
 	int ns_count;
 	br >> ns_count;
 	for (int i = 0; i < ns_count; i++) {
