@@ -13,6 +13,7 @@
 
 #include "crypto.h"
 #include "aes.hpp"
+#include <cstdint>
 #include <string>
 #include <cstring>
 #include <sstream>
@@ -98,6 +99,41 @@ std::string random_bytes(asUINT len) {
 // Caturria's Monocypher chacha20 asset encrypting iostream implementation
 static const int32_t chacha_iostream_magic = 0xAceFaded; // We prepend this to the first block of plaintext before encrypting to help identify the resource as a NVGT encrypted asset.
 static const int nonce_length = 24;
+
+// ---------------------------------------------------------------------------
+// In-memory key masking.
+//
+// The derived ChaCha key must live in RAM for as long as a pack is open, which
+// is exactly what tools like nvgt_pack_recover.py harvest. To make that harder
+// we never keep the raw key in our objects: we store key_obf = key XOR mask,
+// where the mask is recomputed on demand from the object's own address and a
+// compile-time secret. The mask is never stored and nothing points to it, so a
+// memory scraper cannot find a usable key next to the nonce, cannot brute the
+// magic over contiguous windows, and has no pointer to follow to a mask page.
+//
+// The secret below is wrapped in _O(...) (NVGT's obfuscate.h macro), so the
+// literal is XOR-encrypted in the .exe and only decrypted in memory when used.
+// A static `strings`/hex search of the binary therefore reveals nothing, which
+// forces an attacker into real reverse engineering or runtime hooking instead.
+//
+// !!! CHANGE THIS to your own long, random passphrase before shipping, and keep
+// it out of source control / public repos. obfuscate.h hides it in the binary,
+// but anyone who has the literal can recompute every mask.
+static void derive_mask(const void *self, uint8_t out[32]) {
+	const char *secret = _O("CHANGE-ME-to-a-long-random-passphrase-2f9c1a7e4b6d8051");
+	// Compact the (variable-length) secret to 32 bytes so the seed buffer is
+	// bounded regardless of how long the passphrase is.
+	uint8_t sk[32];
+	crypto_blake2b(sk, 32, (const uint8_t *)secret, strlen(secret));
+	uintptr_t a = reinterpret_cast<uintptr_t>(self);
+	uint8_t seed[sizeof(a) + 32];
+	memcpy(seed, &a, sizeof(a));
+	memcpy(seed + sizeof(a), sk, 32);
+	crypto_blake2b(out, 32, seed, sizeof(seed));
+	crypto_wipe(sk, 32);
+	crypto_wipe(seed, sizeof(seed));
+}
+
 chacha_ostreambuf::chacha_ostreambuf(std::ostream &sink, const std::string &key, const std::string &nonce)
 	: BasicBufferedStreamBuf(64, std::ios_base::out) {
 
@@ -106,7 +142,15 @@ chacha_ostreambuf::chacha_ostreambuf(std::ostream &sink, const std::string &key,
 	if (nonce.length() != nonce_length)
 		throw std::invalid_argument("Incorrect nonce length.");
 	// Todo discuss this with people. Blake2B is not appropriate for key derivation because it's fast, but for a game that needs to load thousands of assets in seconds, we can't really afford something like Argon2 either. We should probably decide on a default function and expose it in nvgt_config.h for commercial devs to customize.
-	crypto_blake2b(this->key, 32, (uint8_t *)key.data(), key.size());
+	// Derive the key, then immediately mask it so the raw key never persists.
+	crypto_blake2b(this->key_obf, 32, (uint8_t *)key.data(), key.size());
+	{
+		uint8_t m[32];
+		derive_mask(this, m);
+		for (int i = 0; i < 32; i++)
+			this->key_obf[i] ^= m[i];
+		crypto_wipe(m, 32);
+	}
 	memcpy(this->nonce, nonce.data(), 24);
 	// Put the nonce directly into the sink in cleartext.
 	sink.write((const char *)this->nonce, nonce_length);
@@ -120,7 +164,7 @@ chacha_ostreambuf::chacha_ostreambuf(std::ostream &sink, const std::string &key,
 chacha_ostreambuf::~chacha_ostreambuf() {
 
 	// Should explicitly destroy the contents of the internal buffers.
-	crypto_wipe((void *)key, 32);
+	crypto_wipe((void *)key_obf, 32);
 	crypto_wipe((void *)nonce, nonce_length);
 	if (owns_sink)
 		delete sink;
@@ -128,9 +172,21 @@ chacha_ostreambuf::~chacha_ostreambuf() {
 void chacha_ostreambuf::own_sink(bool owns) {
 	this->owns_sink = owns;
 }
+// Reconstruct the real key into a caller-supplied buffer. The raw key only
+// exists on the caller's stack for one crypto call; the caller wipes it after.
+void chacha_ostreambuf::load_key(uint8_t out[32]) const {
+	uint8_t m[32];
+	derive_mask(this, m);
+	for (int i = 0; i < 32; i++)
+		out[i] = key_obf[i] ^ m[i];
+	crypto_wipe(m, 32);
+}
 int chacha_ostreambuf::writeToDevice(const char *buffer, std::streamsize length) {
 
+	uint8_t key[32];
+	load_key(key);
 	counter = crypto_chacha20_x((uint8_t *)work, (const uint8_t *)buffer, length, key, nonce, counter);
+	crypto_wipe((void *)key, 32);
 
 	sink->write((const char *)work, length);
 	// Q: what am I expected to return here? The Poco docs don't say. A: count of bytes written... but why is the return type shorter than the length argument?
@@ -166,12 +222,22 @@ chacha_istreambuf::chacha_istreambuf(std::istream &source, const std::string &ke
 		throw std::invalid_argument("Key cannot be blank.");
 
 	// Todo discuss this with people. Blake2B is not appropriate for key derivation because it's fast, but for a game that needs to load thousands of assets in seconds, we can't really afford something like Argon2 either. We should probably decide on a default function and expose it in nvgt_config.h for commercial devs to customize.
-	crypto_blake2b(this->key, 32, (uint8_t *)key.data(), key.size());
+	// Derive then mask the key (see chacha_ostreambuf constructor for rationale).
+	crypto_blake2b(this->key_obf, 32, (uint8_t *)key.data(), key.size());
+	{
+		uint8_t m[32];
+		derive_mask(this, m);
+		for (int i = 0; i < 32; i++)
+			this->key_obf[i] ^= m[i];
+		crypto_wipe(m, 32);
+	}
 
 	// Consume the nonce directly from the source.
 	source.read((char *)nonce, 24);
-	if (source.gcount() != 24)
+	if (source.gcount() != 24) {
+		crypto_wipe((void *)key_obf, 32);
 		throw std::invalid_argument("Unexpected error or end of stream during initialization.");
+	}
 
 	// The source is now positioned at the start of the payload. Capture this offset and use it later to calculate seek positions.
 	source_offset = source.tellg();
@@ -182,6 +248,7 @@ chacha_istreambuf::chacha_istreambuf(std::istream &source, const std::string &ke
 	sgetn((char *)&magic, 4);
 	if (magic != chacha_iostream_magic) {
 		this->source = NULL; // Disown.
+		crypto_wipe((void *)key_obf, 32);
 		throw std::invalid_argument("This is not a valid asset stream.");
 	}
 	owns_source = false;
@@ -189,11 +256,19 @@ chacha_istreambuf::chacha_istreambuf(std::istream &source, const std::string &ke
 chacha_istreambuf::~chacha_istreambuf() {
 
 	crypto_wipe(work, 64);
-	crypto_wipe(key, 32);
+	crypto_wipe(key_obf, 32);
 	crypto_wipe(nonce, 24);
 
 	if (owns_source)
 		delete source;
+}
+// See chacha_ostreambuf::load_key. Caller must wipe out[] after use.
+void chacha_istreambuf::load_key(uint8_t out[32]) const {
+	uint8_t m[32];
+	derive_mask(this, m);
+	for (int i = 0; i < 32; i++)
+		out[i] = key_obf[i] ^ m[i];
+	crypto_wipe(m, 32);
 }
 void chacha_istreambuf::own_source(bool owns) {
 	owns_source = owns;
@@ -212,7 +287,10 @@ int chacha_istreambuf::readFromDevice(char *buffer, std::streamsize length) {
 	if (length == 0) {
 		return -1; // EOF.
 	}
+	uint8_t key[32];
+	load_key(key);
 	counter = crypto_chacha20_x((uint8_t *)buffer, (const uint8_t *)buffer, length, key, nonce, counter);
+	crypto_wipe((void *)key, 32);
 	return (int)length;
 }
 std::streampos chacha_istreambuf::seekoff(std::streamoff off, std::ios_base::seekdir dir, std::ios_base::openmode which) {
