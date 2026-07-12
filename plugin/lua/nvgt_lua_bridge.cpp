@@ -153,10 +153,11 @@ static bool tid_is_enum(asIScriptEngine* engine, int tid) {
 // Parsed default argument. AngelScript evaluates default args at compile time so when calling through a context we
 // must supply every argument ourselves; we handle the simple literals which cover nearly all of NVGT's API.
 struct default_val {
-	enum { DV_NONE, DV_NUM, DV_BOOL, DV_STR, DV_NULL } kind = DV_NONE;
+	enum { DV_NONE, DV_NUM, DV_BOOL, DV_STR, DV_NULL, DV_PROPCALL } kind = DV_NONE;
 	double num = 0;
 	bool boolean = false;
 	std::string str;
+	asIScriptFunction* getter = nullptr; // DV_PROPCALL: virtual global property accessor to evaluate at call time
 };
 
 static default_val parse_default(nvgt_lua_bridge* b, const char* text) {
@@ -194,6 +195,18 @@ static default_val parse_default(nvgt_lua_bridge* b, const char* text) {
 		else if (tid == asTYPEID_BOOL) { dv.kind = default_val::DV_BOOL; dv.boolean = *(char*)a != 0; }
 		else dv.num = *(int*)a;
 		return dv;
+	}
+	// Virtual global properties like sound_default_pack resolve to a get_ accessor returning an object handle.
+	auto git = b->global_funcs.find("get_" + s);
+	if (git != b->global_funcs.end()) {
+		for (asIScriptFunction* f : git->second.overloads) {
+			int rtid = f->GetReturnTypeId();
+			if (f->GetParamCount() == 0 && rtid & asTYPEID_MASK_OBJECT) {
+				dv.kind = default_val::DV_PROPCALL;
+				dv.getter = f;
+				return dv;
+			}
+		}
 	}
 	return dv;
 }
@@ -356,6 +369,22 @@ static bool set_context_arg(lua_State* L, nvgt_lua_bridge* b, asIScriptContext* 
 	asITypeInfo* pti = engine->GetTypeInfoById(tid);
 	if (pti && pti->GetFuncdefSignature()) { err = std::string("passing Lua functions as callbacks is not supported yet (parameter ") + std::to_string(i + 1) + " of " + f->GetDeclaration() + ")"; return false; }
 	if (tid & asTYPEID_MASK_OBJECT) {
+		if (!has_lua_arg && dv.kind == default_val::DV_PROPCALL) {
+			// Evaluate the property accessor now and borrow its result for the call.
+			asIScriptContext* c2 = engine->RequestContext();
+			if (!c2) { err = "could not acquire script context for default argument"; return false; }
+			ctx_guard guard{engine, c2};
+			c2->Prepare(dv.getter);
+			if (c2->Execute() != asEXECUTION_FINISHED) { err = std::string("failed to evaluate default argument ") + defarg; return false; }
+			void* obj = c2->GetReturnObject();
+			if (obj) {
+				asITypeInfo* rti = engine->GetTypeInfoById(dv.getter->GetReturnTypeId());
+				engine->AddRefScriptObject(obj, rti);
+				scratch.temp_objects.push_back({obj, rti});
+			}
+			ctx->SetArgAddress(i, obj);
+			return true;
+		}
 		if (!has_lua_arg || lua_isnil(L, lua_idx)) {
 			if (tid & asTYPEID_OBJHANDLE) { ctx->SetArgAddress(i, nullptr); return true; }
 			err = "nil passed for non-handle object parameter " + std::to_string(i + 1) + " of " + f->GetDeclaration();
