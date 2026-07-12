@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fallback
+      - lua-plugin
     tags:
       - "*"
     paths-ignore:
