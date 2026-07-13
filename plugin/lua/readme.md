@@ -13,10 +13,10 @@ void main() {
 }
 ```
 
-On the Lua side, NVGT's API lives in the `nvgt` table. When `expose_nvgt(true)` is used (the default), unknown globals also fall back to it, so both `nvgt.speak("hello")` and `speak("hello")` work. Lua's own globals always win over NVGT names, so Lua's `print`, `string` and `math` remain untouched; reach the NVGT equivalents through `nvgt.print`, `nvgt.string` and so on.
+On the Lua side, NVGT's API lives in the `nvgt` table. When `expose_nvgt(true)` is used (the default), unknown globals also fall back to it, so both `nvgt.screen_reader_speak("hello")` and `screen_reader_speak("hello")` work. Lua's own globals always win over NVGT names, so Lua's `print`, `string` and `math` remain untouched; reach the NVGT equivalents through `nvgt.print`, `nvgt.string` and so on.
 
 ```lua
-speak("Hello there!")
+screen_reader_speak("Hello there!")
 local s = nvgt.sound()
 s:load("music.ogg")
 s:play_looped()
@@ -24,6 +24,8 @@ local v = nvgt.vector(1, 2, 3) + nvgt.vector(4, 5, 6)
 println(v:length())
 wait(50)
 ```
+
+Note that only what is registered with the engine itself is visible. Functions and classes written in AngelScript includes such as speech.nvgt (`speak` and friends) live in the compiled script module, not the engine, so they cannot be called from Lua; use the underlying registered functions like `screen_reader_speak` and `tts_voice` instead.
 
 ## lua_state members
 * `void open_libraries()`: opens Lua's standard libraries.
@@ -46,7 +48,7 @@ wait(50)
 ## limitations
 * Lua functions cannot yet be passed where NVGT expects a callback (funcdef); such parameters are rejected with a clear error.
 * A lua_state is not thread safe; create one per thread if needed.
-* Script classes declared in .nvgt files are not visible to Lua, only types registered with the engine.
+* Functions and classes declared in .nvgt files (including standard includes like speech.nvgt) are not visible to Lua, only what is registered with the engine.
 * Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
 
 ## building
