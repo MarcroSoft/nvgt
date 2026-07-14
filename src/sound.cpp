@@ -1111,7 +1111,7 @@ public:
 			spatializer->release();
 		}
 		if (parent_mixer)
-//			parent_mixer->release();
+			parent_mixer->release();
 		if (node_chain)
 			node_chain->release();
 		if (effects_chain)
@@ -1133,10 +1133,13 @@ public:
 	inline void duplicate() override { audio_node_impl::duplicate(); }
 	inline void release() override { audio_node_impl::release(); }
 	bool set_mixer(mixer *mix) override {
-		if (mix == parent_mixer)
+		// This function owns one reference to mix (script calls pass it via the mixer@ parameter; internal C++ callers must duplicate before calling). It is kept in parent_mixer and released on replacement or destruction.
+		if (mix == parent_mixer) {
+			if (mix) mix->release(); // drop the incoming duplicate reference, we already hold one
 			return false;
+		}
 		if (parent_mixer) {
-//			parent_mixer->release();
+			parent_mixer->release();
 			parent_mixer = nullptr;
 		}
 		if (mix) {
