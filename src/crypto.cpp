@@ -120,7 +120,7 @@ static const int nonce_length = 24;
 // it out of source control / public repos. obfuscate.h hides it in the binary,
 // but anyone who has the literal can recompute every mask.
 static void derive_mask(const void *self, uint8_t out[32]) {
-	const char *secret = _O("CHANGE-ME-to-a-long-random-passphrase-2f9c1a7e4b6d8051");
+	const char *secret = _O("nv-qfgje6uXFCfFL9gndkgySqrWAzc4FloVN5ODLuEcDZI8WgeuC5KyFjjw");
 	// Compact the (variable-length) secret to 32 bytes so the seed buffer is
 	// bounded regardless of how long the passphrase is.
 	uint8_t sk[32];
