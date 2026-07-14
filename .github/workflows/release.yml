@@ -253,7 +253,9 @@ jobs:
 
   cleanup_config:
     runs-on: ubuntu-latest
-    needs: [generate_config, mac_build, linux_build, android_build, windows_build]
+    # The package jobs download every artifact of the run by listing first and fetching by id afterwards; deleting the
+    # config artifact concurrently makes that fetch fail intermittently, so wait for them before cleaning up.
+    needs: [generate_config, mac_build, linux_build, android_build, windows_build, windows_package, mac_package, linux_package]
     if: always() && needs.generate_config.outputs.artifact-id != ''
     permissions:
       actions: write
