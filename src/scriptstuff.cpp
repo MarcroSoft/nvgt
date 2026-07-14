@@ -391,8 +391,19 @@ CScriptDictionary* script_function_call(asIScriptFunction* func, CScriptDictiona
 		void* ret = ctx->GetAddressOfReturnValue();
 		if (ret && !args)
 			args = CScriptDictionary::Create(g_ScriptEngine);
-		if (args && ret)
-			args->Set("0", ret, ret_type_id);
+		if (args && ret) {
+			// The dictionary can only read numbers back that were stored as int64 or double (bools and enums are handled separately), so widen smaller primitives before storing the return value or scripts cannot retrieve it.
+			switch (ret_type_id) {
+				case asTYPEID_INT8: args->Set("0", asINT64(*(char*)ret)); break;
+				case asTYPEID_INT16: args->Set("0", asINT64(*(short*)ret)); break;
+				case asTYPEID_INT32: args->Set("0", asINT64(*(int*)ret)); break;
+				case asTYPEID_UINT8: args->Set("0", asINT64(*(unsigned char*)ret)); break;
+				case asTYPEID_UINT16: args->Set("0", asINT64(*(unsigned short*)ret)); break;
+				case asTYPEID_UINT32: args->Set("0", asINT64(*(unsigned int*)ret)); break;
+				case asTYPEID_FLOAT: args->Set("0", double(*(float*)ret)); break;
+				default: args->Set("0", ret, ret_type_id);
+			}
+		}
 	}
 	if (new_context) g_ScriptEngine->ReturnContext(ctx);
 	else ctx->PopState();

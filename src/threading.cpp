@@ -268,6 +268,32 @@ template <class T> void atomics_destruct(T* obj) {
 template<typename T> bool is_always_lock_free(T* obj) {
 	return obj->is_always_lock_free;
 }
+// Temporary portability shims for standard libraries without C++20 floating point atomics (notably Apple's libc++);
+// remove together with their registrations below once the atomics registration is reworked upstream.
+template <class A, class V> V atomics_fetch_add_fallback(A* obj, V arg, std::memory_order order) {
+	V expected = obj->load(std::memory_order_relaxed);
+	while (!obj->compare_exchange_weak(expected, expected + arg, order, std::memory_order_relaxed)) {}
+	return expected;
+}
+template <class A, class V> V atomics_fetch_sub_fallback(A* obj, V arg, std::memory_order order) {
+	V expected = obj->load(std::memory_order_relaxed);
+	while (!obj->compare_exchange_weak(expected, expected - arg, order, std::memory_order_relaxed)) {}
+	return expected;
+}
+template <class A, class V> V atomics_add_assign_fallback(A* obj, V arg) {
+	return atomics_fetch_add_fallback(obj, arg, std::memory_order_seq_cst) + arg;
+}
+template <class A, class V> V atomics_sub_assign_fallback(A* obj, V arg) {
+	return atomics_fetch_sub_fallback(obj, arg, std::memory_order_seq_cst) - arg;
+}
+// Wrappers instead of member pointers because some standard libraries declare notify_one/notify_all with differing
+// const qualification (GCC 11's __atomic_float has them const), which breaks the asMETHODPR cast.
+template <class A> void atomics_notify_one_wrapper(A* obj) {
+	obj->notify_one();
+}
+template <class A> void atomics_notify_all_wrapper(A* obj) {
+	obj->notify_all();
+}
 template<typename T>
 consteval const char* as_script_int_name() {
 	static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
@@ -282,14 +308,14 @@ consteval const char* as_script_int_name() {
 	else if constexpr (sizeof(T) == 8)
 		return s ? "int64" : "uint64";
 	else
-		static_assert(false, "value_type has no matching AngelScript primitive");
+		static_assert(sizeof(T) == 0, "value_type has no matching AngelScript primitive"); // dependent so pre-C++26 compilers accept the discarded branch
 } else {
 if (sizeof(T) == 4)
 return "float";
 else if (sizeof(T) == 8)
 return "double";
 else
-static_assert(false, "value_type has no matching AngelScript primitive");
+static_assert(sizeof(T) == 0, "value_type has no matching AngelScript primitive");
 }
 }
 template<typename atomic_type, typename divisible_type> void register_atomic_type(asIScriptEngine* engine, const std::string& type_name, const std::string& regular_type_name) {
@@ -308,20 +334,37 @@ template<typename atomic_type, typename divisible_type> void register_atomic_typ
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order success, memory_order failure)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("void wait(%s old, memory_order order = MEMORY_ORDER_SEQ_CST) const", regular_type_name).c_str(), asMETHODPR(atomic_type, wait, (divisible_type, std::memory_order) const noexcept, void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asMETHODPR(atomic_type, notify_one, () noexcept, void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asMETHODPR(atomic_type, notify_all, () noexcept, void), asCALL_THISCALL);
+	engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asFUNCTION(atomics_notify_one_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asFUNCTION(atomics_notify_all_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
 	// Begin type-specific atomics
 	if constexpr((std::is_integral_v<divisible_type> || std::is_floating_point_v<divisible_type>) && !std::is_same_v<divisible_type, bool>) {
+		// Older standard libraries (notably Apple's libc++) lack the C++20 floating point atomic member functions, so
+		// fall back to compare-exchange based wrappers there. Temporary; see the shims above.
+		#ifdef __cpp_lib_atomic_float
+		constexpr bool native_fp_atomics = true;
+		#else
+		constexpr bool native_fp_atomics = false;
+		#endif
+		if constexpr(std::is_integral_v<divisible_type> || native_fp_atomics) {
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_add(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_add, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_sub(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_sub, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
+		} else {
+		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_add(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_fetch_add_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
+		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_sub(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_fetch_sub_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
+		}
 		#ifdef __cpp_lib_atomic_min_max // Only available in C++26 mode or later
 		if constexpr(std::is_integral_v<divisible_type>) {
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_max(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_max, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_min(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_min, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 	}
 		#endif
+		if constexpr(std::is_integral_v<divisible_type> || native_fp_atomics) {
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opAddAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator+=, (divisible_type) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opSubAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator-=, (divisible_type) noexcept, divisible_type), asCALL_THISCALL);
+		} else {
+		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opAddAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_add_assign_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
+		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opSubAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_sub_assign_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
+		}
 		if constexpr(std::is_integral_v<divisible_type>) {
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPreInc()", regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, () noexcept, divisible_type), asCALL_THISCALL);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostInc(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, (int) noexcept, divisible_type), asCALL_THISCALL);
@@ -367,8 +410,14 @@ void RegisterAtomics(asIScriptEngine* engine) {
 	register_atomic_type<std::atomic_int64_t, std::int64_t>(engine, "atomic_int64", "int64");
 	register_atomic_type<std::atomic_uint64_t, std::uint64_t>(engine, "atomic_uint64", "uint64");
 	register_atomic_type<std::atomic_bool, bool>(engine, "atomic_bool", "bool");
+	#ifdef __cpp_lib_atomic_lock_free_type_aliases
 	register_atomic_type<std::atomic_signed_lock_free, std::atomic_signed_lock_free::value_type>(engine, "atomic_signed_lock_free", as_script_int_name<std::atomic_signed_lock_free::value_type>());
 	register_atomic_type<std::atomic_unsigned_lock_free, std::atomic_unsigned_lock_free::value_type>(engine, "atomic_unsigned_lock_free", as_script_int_name<std::atomic_unsigned_lock_free::value_type>());
+	#else
+	// Standard libraries without the C++20 lock-free alias types (e.g. GCC 11) get 32 bit int atomics, which are lock-free on all supported targets.
+	register_atomic_type<std::atomic_int32_t, std::int32_t>(engine, "atomic_signed_lock_free", "int");
+	register_atomic_type<std::atomic_uint32_t, std::uint32_t>(engine, "atomic_unsigned_lock_free", "uint");
+	#endif
 	register_atomic_type<std::atomic<float>, float>(engine, "atomic_float", "float");
 	register_atomic_type<std::atomic<double>, double>(engine, "atomic_double", "double");
 	engine->RegisterGlobalFunction("void atomic_thread_fence(memory_order order)", asFUNCTION(std::atomic_thread_fence), asCALL_CDECL);
