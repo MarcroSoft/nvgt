@@ -29,11 +29,19 @@
 
 class chacha_ostreambuf : public Poco::BasicBufferedStreamBuf<char, std::char_traits<char>> {
 	std::ostream *sink;
-	uint8_t key[32];
+	// The nonce is written to the payload in cleartext, so it can be located in
+	// a memory dump. Keep it away from the (obfuscated) key.
 	uint8_t nonce[24];
 	uint8_t work[64]; // Will contain the most recent block of cyphertext.
 	uint64_t counter;
+	// key_obf = BLAKE2b(key string) XOR derive_mask(this). The mask is NOT
+	// stored anywhere and nothing points to it: it is recomputed on demand from
+	// this object's own address plus a compile-time secret. A memory scraper
+	// therefore has neither a raw key nor a pointer to follow -- recovering the
+	// key now requires reverse-engineering the binary or hooking the cipher.
+	uint8_t key_obf[32];
 	bool owns_sink;
+	void load_key(uint8_t out[32]) const; // reconstruct real key into a temp buffer
 
 public:
 	chacha_ostreambuf(std::ostream &sink, const std::string &key, const std::string &nonce);
@@ -49,12 +57,14 @@ public:
 };
 class chacha_istreambuf : public Poco::BasicBufferedStreamBuf<char, std::char_traits<char>> {
 	std::istream *source;
-	uint8_t key[32];
+	// nonce kept away from key_obf on purpose -- see chacha_ostreambuf above.
 	uint8_t nonce[24];
 	uint8_t work[64];
 	uint64_t counter;
 	std::streamoff source_offset; // Location in the backing source after reading the nonce.
+	uint8_t key_obf[32]; // BLAKE2b(key) XOR derive_mask(this); never the raw key, no stored mask.
 	bool owns_source;
+	void load_key(uint8_t out[32]) const;
 
 public:
 	// Note that the nonce is not passed in here because it's expected to be prepended to the payload itself.
