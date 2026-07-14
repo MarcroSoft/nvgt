@@ -13,6 +13,7 @@ Help("""
 		deps_path=path: Optional location where dependencies are stored? Defaults to a folder named after the platform in the repository root.
 		no_upx=0 or 1 (default 1): Disable UPX stubs?
 		no_plugins=0 or 1 (default 0): Disable the plugin system entirely?
+		no_sapi32host=0 or 1 (default 0): Disable building the 32 bit SAPI host (nvgt_sapi32host.exe) which allows access to 32 bit only SAPI voices on windows?
 		no_shared_plugins=0 or 1 (default 0): Only compile plugins statically?
 		no_stubs=0 or 1 (default 0): Disable compilation of all stubs?
 		no_user=0 or 1 (default 0): Pretend that the user directory doesn't exist?
@@ -248,6 +249,13 @@ if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("ios", "
 				stub_nc_u = stub_env.UPX(f"release/stub/nvgt_{stub_platform}_nc_upx.bin", stub_nc)
 				stub_env.AddPostAction(stub_nc_u, fix_stub)
 				env.Install("c:/nvgt/stub", stub_nc_u)
+
+# 32 bit SAPI host, a small helper process which allows 64 bit NVGT applications to keep using SAPI voices that only ship 32 bit binaries (Eloquence, older RealSpeak etc).
+if env["NVGT_TARGET"] == "windows" and ARGUMENTS.get("no_sapi32host", "0") == "0":
+	env32 = Environment(TARGET_ARCH = "x86")
+	env32.Append(CCFLAGS = ["/MT", "/O2", "/utf-8"], CPPPATH = ["#dep"])
+	VariantDir("build/obj_sapi32host", "dep", duplicate = 0)
+	env32.Program("release/lib/nvgt_sapi32host", ["build/obj_sapi32host/sapi32host.c", "build/obj_sapi32host/sapibridge.c"])
 
 if ARGUMENTS.get("copylibs", "1") == "1":
 	env["NVGT_OSDEV_COPY_LIBS"](env)

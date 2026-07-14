@@ -15,6 +15,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define VC_EXTRALEAN
 #include <windows.h>
+#include <mutex>
+#include <string>
+#include <vector>
 #include <sapibridge.h>
 #include "tts.h"
 
@@ -24,6 +27,43 @@ public:
 	sapi5_engine();
 	virtual ~sapi5_engine();
 	virtual bool is_available() override;
+	virtual tts_pcm_generation_state get_pcm_generation_state() override;
+	virtual tts_audio_data* speak_to_pcm(const std::string &text) override;
+	virtual float get_rate() override;
+	virtual float get_pitch() override;
+	virtual float get_volume() override;
+	virtual void set_rate(float rate) override;
+	virtual void set_pitch(float pitch) override;
+	virtual void set_volume(float volume) override;
+	virtual bool get_rate_range(float& minimum, float& midpoint, float& maximum) override;
+	virtual bool get_pitch_range(float& minimum, float& midpoint, float& maximum) override;
+	virtual bool get_volume_range(float& minimum, float& midpoint, float& maximum) override;
+	virtual int get_voice_count() override;
+	virtual std::string get_voice_name(int index) override;
+	virtual std::string get_voice_language(int index) override;
+	virtual bool set_voice(int voice) override;
+	virtual int get_current_voice() override;
+};
+
+// Proxies SAPI through a 32 bit helper process (lib/nvgt_sapi32host.exe) so that voices which only ship 32 bit binaries (Eloquence, older RealSpeak etc) remain usable from 64 bit NVGT, similar to the bridges found in 64 bit JAWS and NVDA.
+class sapi5_32_engine : public tts_engine_impl {
+	struct bridge_voice {
+		int remote_index; // index within the helper process's own voice list
+		std::string name;
+		std::string language;
+	};
+	HANDLE process;
+	HANDLE stdin_write;
+	HANDLE stdout_read;
+	std::mutex io_mtx;
+	std::vector<bridge_voice> voices;
+	bool transact(unsigned char opcode, const std::string &payload, std::string &response);
+	bool transact_set_int(unsigned char opcode, int value);
+	int transact_get_int(unsigned char opcode, int fallback);
+	void shutdown();
+public:
+	sapi5_32_engine();
+	virtual ~sapi5_32_engine();
 	virtual tts_pcm_generation_state get_pcm_generation_state() override;
 	virtual tts_audio_data* speak_to_pcm(const std::string &text) override;
 	virtual float get_rate() override;
