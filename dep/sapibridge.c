@@ -1,10 +1,23 @@
 #include "sapibridge.h"
 
+
+/* SAPI caches entry points into the audio compression manager without holding its own reference to the dll, so if
+ * anything else in the process transiently loads and then frees msacm32 (observed on Windows 7 where the audio stack
+ * churns dlls during startup), a later Speak jumps into unloaded code. Pin it for the lifetime of the process. */
+static void sbz_pin_codec_libraries(void)
+{
+static int pinned=0;
+if(pinned) return;
+LoadLibraryW(L"msacm32.dll");
+pinned=1;
+}
+
 int sb_sapi_initialise(sb_sapi* sapi)
 {
 if(!sapi) return 0;
 if(sbz_sapi_is_init(sapi)) return 0;
 sbz_sapi_reset(sapi);
+sbz_pin_codec_libraries();
 
 /* Unfortunately, because we're runtime linking, we have to specify the COM ID sapi manually. */
 CLSID CLSID_SpVoice={0x96749377, 0x3391, 0x11D2, {0x9E, 0xE3, 0x00, 0xC0, 0x4F, 0x79, 0x73, 0x96}};
@@ -20,12 +33,20 @@ if(!sbz_sapi_refresh_voices(sapi))
 sbz_sapi_cleanup(sapi);
 return 0;
 }
-if(!sbz_sapi_cache_audio_attributes(sapi))
+/* Route output to the memory stream before touching audio attributes. Asking the voice for its output stream while it
+ * still points at the default audio device makes SAPI open the winmm wave device, which crashes inside the wave driver
+ * load on some systems (observed on Windows 7 with other audio stacks active in the process). We only ever render to
+ * memory anyway, and speak_to_memory re-caches the attributes after every Speak, so the device path is never needed. */
+sbz_sapi_set_init_flag(sapi);
+if(!sbz_sapi_output_to_stream(sapi))
 {
 sbz_sapi_cleanup(sapi);
 return 0;
 }
-return sbz_sapi_set_init_flag(sapi);
+/* Best effort at init: a freshly created memory stream may not report a format yet on all systems; the attributes are
+ * re-cached from the real stream after every Speak in sbz_sapi_speak_to_memory. */
+sbz_sapi_cache_audio_attributes(sapi);
+return 1;
 }
 int sb_sapi_speak(sb_sapi* sapi, char* text, int interrupt)
 {
