@@ -126,6 +126,9 @@ env.Append(CPPDEFINES = ["NVGT_BUILDING", "NO_OBFUSCATE"])
 if env["NVGT_TARGET"] == "windows":
 	deb_rel_flags = ["/DEBUG", "/INCREMENTAL:NO"] if ARGUMENTS.get("debug", "0") == "1" else ["/OPT:ICF=3"]
 	env.Append(CPPDEFINES = ["_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"], LINKFLAGS = ["/ignore:4099", "/delayload:phonon.dll"] + deb_rel_flags)
+	# Modern MSVC toolsets emit unconditional imports of Windows 8+ APIs (for example GetSystemTimePreciseAsFileTime from the STL), which stops nvgt and compiled games from even loading on Windows 7. YY-Thunks (built by the yy-thunks vcpkg port) satisfies those imports at link time with runtime fallbacks to downlevel equivalents. The stub environment is cloned from this one below, so games keep working on Windows 7 too.
+	yy_thunks = os.path.join(env["NVGT_OSDEV_PATH"], "lib", "YY_Thunks_for_Win7.obj")
+	if os.path.isfile(yy_thunks): env.Append(LINKFLAGS = [yy_thunks])
 elif env["NVGT_TARGET"] in ("macos", "ios"):
 	sources.append("apple.mm")
 	# We must link Apple frameworks here rather than above in the system libraries section to insure that they don't get linked with random plugins.
@@ -254,6 +257,9 @@ if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("ios", "
 if env["NVGT_TARGET"] == "windows" and ARGUMENTS.get("no_sapi32host", "0") == "0":
 	env32 = Environment(TARGET_ARCH = "x86")
 	env32.Append(CCFLAGS = ["/MT", "/O2", "/utf-8"], CPPPATH = ["#dep"])
+	# Same Windows 7 insurance as the main binaries, with the 32 bit thunk object.
+	yy_thunks32 = os.path.join(env["NVGT_OSDEV_PATH"], "lib", "YY_Thunks_for_Win7_x86.obj")
+	if os.path.isfile(yy_thunks32): env32.Append(LINKFLAGS = [yy_thunks32])
 	VariantDir("build/obj_sapi32host", "dep", duplicate = 0)
 	env32.Program("release/lib/nvgt_sapi32host", ["build/obj_sapi32host/sapi32host.c", "build/obj_sapi32host/sapibridge.c"])
 

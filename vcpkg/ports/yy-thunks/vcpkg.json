@@ -1,0 +1,7 @@
+{
+  "name": "yy-thunks",
+  "version": "1.2.1",
+  "description": "Link-time thunks that let binaries built with modern MSVC toolsets keep running on older Windows versions by falling back to downlevel APIs, used by NVGT to preserve Windows 7 support.",
+  "homepage": "https://github.com/Chuyu-Team/YY-Thunks",
+  "supports": "windows"
+}
