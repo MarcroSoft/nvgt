@@ -60,6 +60,7 @@ class sapi5_32_engine : public tts_engine_impl {
 	bool transact(unsigned char opcode, const std::string &payload, std::string &response);
 	bool transact_set_int(unsigned char opcode, int value);
 	int transact_get_int(unsigned char opcode, int fallback);
+	bool kill_connection(); // immediate teardown after a protocol failure, io_mtx must be held
 	void shutdown();
 public:
 	sapi5_32_engine();
