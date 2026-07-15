@@ -186,7 +186,9 @@ sapi5_32_engine::~sapi5_32_engine() { shutdown(); }
 void sapi5_32_engine::shutdown() {
 	if (stdin_write) {
 		string response;
-		transact(SB32_QUIT, "", response);
+		transact(SB32_QUIT, "", response); // may tear the connection down itself on failure, so re-check the handle
+	}
+	if (stdin_write) {
 		CloseHandle(stdin_write);
 		stdin_write = nullptr;
 	}
@@ -200,21 +202,38 @@ void sapi5_32_engine::shutdown() {
 		process = nullptr;
 	}
 }
+// Closes the pipes and terminates the host without the usual quit handshake. Used when a transaction fails partway, since the stream position is then unknown and every later exchange would read garbage. io_mtx must be held.
+bool sapi5_32_engine::kill_connection() {
+	if (stdin_write) {
+		CloseHandle(stdin_write);
+		stdin_write = nullptr;
+	}
+	if (stdout_read) {
+		CloseHandle(stdout_read);
+		stdout_read = nullptr;
+	}
+	if (process) {
+		TerminateProcess(process, 1);
+		CloseHandle(process);
+		process = nullptr;
+	}
+	return false;
+}
 bool sapi5_32_engine::transact(unsigned char opcode, const string &payload, string &response) {
 	lock_guard<mutex> lock(io_mtx);
 	if (!stdin_write || !stdout_read) return false;
-	if (payload.size() >= SB32_MAX_PACKET) return false;
+	if (payload.size() >= SB32_MAX_PACKET) return false; // nothing was sent, the stream is still in sync
 	uint32_t length = (uint32_t)payload.size() + 1;
 	string packet((const char *)&length, 4);
 	packet.push_back((char)opcode);
 	packet += payload;
-	if (!pipe_write_exact(stdin_write, packet.data(), packet.size())) return false;
+	if (!pipe_write_exact(stdin_write, packet.data(), packet.size())) return kill_connection();
 	uint32_t response_length = 0;
-	if (!pipe_read_exact(stdout_read, &response_length, 4)) return false;
-	if (response_length < 1 || response_length > 0x8000000) return false;
+	if (!pipe_read_exact(stdout_read, &response_length, 4)) return kill_connection();
+	if (response_length < 1 || response_length > 0x8000000) return kill_connection();
 	string body(response_length, 0);
-	if (!pipe_read_exact(stdout_read, &body[0], response_length)) return false;
-	if (body[0] != 1) return false;
+	if (!pipe_read_exact(stdout_read, &body[0], response_length)) return kill_connection();
+	if (body[0] != 1) return false; // failure response, but fully consumed; the stream stays usable
 	response.assign(body, 1, response_length - 1);
 	return true;
 }

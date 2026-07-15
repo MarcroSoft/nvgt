@@ -8,6 +8,8 @@ on:
 
 jobs:
   web_update:
+    # The website deploy needs the CIFTP/CIPHP secrets which only exist upstream; on forks the build step just hangs until the runner dies.
+    if: github.repository == 'samtupy/nvgt'
     runs-on: windows-2022
     steps:
     - uses: actions/checkout@v4
