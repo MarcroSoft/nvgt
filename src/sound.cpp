@@ -532,9 +532,13 @@ public:
 	sound* play(const string& path, const reactphysics3d::Vector3& position, float volume, float pan, float pitch, mixer* mix, const pack_interface* pack_file, bool autoplay) override {
 		garbage_collect_inline_sounds();
 		sound* snd = new_sound();
-		if (!snd) return nullptr;
+		if (!snd) {
+			if (mix) mix->release(); // this function owns one reference to mix (see set_mixer), drop it on every early return
+			return nullptr;
+		}
 		if (!snd->load(path, pack_file)) {
 			snd->release();
+			if (mix) mix->release();
 			return nullptr;
 		}
 		if (mix) snd->set_mixer(mix);
