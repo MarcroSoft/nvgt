@@ -87,6 +87,7 @@
 	Source: "release\nvgt.exe"; DestDir: "{app}"
 	Source: "release\nvgtw.exe"; DestDir: "{app}"
 	source: "release\lib\*.dll"; DestDir: "{app}\lib"
+	source: "release\lib\nvgt_sapi32host.exe"; DestDir: "{app}\lib"; Flags: skipifsourcedoesntexist
 	; Plugins: curl
 	source: "release\lib\nvgt_curl.dll"; DestDir: "{app}\lib"; components: plugins\curl
 	; Plugins: git
