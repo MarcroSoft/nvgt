@@ -34,6 +34,7 @@ Note that only what is registered with the engine itself is visible. Functions a
 * `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
 * `bool call(const string&in function_name)`: call a global Lua function without arguments.
 * `string last_error`: message of the last failed exec/exec_file/call.
+* `lua_status last_error_code`: Lua status of the last failed exec/exec_file/call — LUA_OK, LUA_ERRRUN, LUA_ERRSYNTAX, LUA_ERRMEM, LUA_ERRERR or LUA_ERRFILE. A syntax or file error means the code never started running; a runtime error means it failed partway through, so globals may have been modified. call reports a missing function as LUA_ERRRUN.
 * `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
 * `get_global_number/get_global_string/get_global_bool(const string&in name)`: read a Lua global.
 * `bool set_global(const string&in name, const ?&in value)`: store any NVGT value in a Lua global — numbers, strings, enums, objects and handles. Requires expose_nvgt. Reference types are shared with Lua; value types are copied.
@@ -42,7 +43,8 @@ Note that only what is registered with the engine itself is visible. Functions a
 
 ## Conversions and helpers
 * Numbers, strings, booleans and enums convert automatically in both directions; enum constants are available by name, e.g. `nvgt.KEY_RETURN`.
-* NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (0-based, as in AngelScript), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
+* Wrapped NVGT containers are 1-based from Lua: `arr[1]` is the first element even though the same array is 0-based in AngelScript. Arrays read `nil` out of range so `ipairs` and the `t[i] == nil` idiom work, and `arr[i] = v` assigns through the element reference (primitives, enums and strings; assigning out of range is an error — NVGT arrays don't grow on assignment, use `arr.insert_last(v)`).
+* NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (1-based on the Lua side), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
 * Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
 * `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
 * Functions with trailing `&out` parameters return those as extra Lua return values.
