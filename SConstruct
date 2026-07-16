@@ -224,7 +224,7 @@ def fix_stub(target, source, env):
 			f.write(b"NV")
 			f.close()
 
-if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("ios", "android"):
+if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] != "android":
 	stub_platform = env["NVGT_TARGET"] if env["NVGT_TARGET"] != "macos" else "mac"
 	VariantDir("build/obj_stub", "src", duplicate = 0)
 	stub_env.Append(CPPDEFINES = ["NVGT_STUB"])
