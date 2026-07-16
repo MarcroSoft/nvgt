@@ -45,6 +45,8 @@ static unsigned char g_MouseButtonsPressed[32];
 static unsigned char g_MouseButtonsReleased[32];
 std::string g_UserInput = "";
 float g_MouseX = 0, g_MouseY = 0, g_MouseZ = 0;
+bool g_MouseIsVirtual = false;
+unsigned int g_KeyboardLastDevice = 0, g_MouseLastDevice = 0;
 float g_MouseAbsX = 0, g_MouseAbsY = 0, g_MouseAbsZ = 0;
 float g_MousePrevX = 0, g_MousePrevY = 0, g_MousePrevZ = 0;
 bool g_KeyboardStateChange = false;
@@ -98,6 +100,7 @@ void InputDestroy() {
 }
 bool InputEvent(SDL_Event* evt) {
 	if (evt->type == SDL_EVENT_KEY_DOWN) {
+		g_KeyboardLastDevice = evt->key.which;
 		g_KeysReleased[evt->key.scancode] = 0;
 		if (!evt->key.repeat) g_KeyboardStateChange = true;
 		if (!evt->key.repeat) {
@@ -108,6 +111,7 @@ bool InputEvent(SDL_Event* evt) {
 			on_key_repeat(evt->key.scancode);
 		}
 	} else if (evt->type == SDL_EVENT_KEY_UP) {
+		g_KeyboardLastDevice = evt->key.which;
 		g_KeysPressed[evt->key.scancode] = 0;
 		g_KeysRepeating[evt->key.scancode] = 0;
 		g_KeysReleased[evt->key.scancode] = 1;
@@ -120,13 +124,23 @@ bool InputEvent(SDL_Event* evt) {
 	else if (evt->type == SDL_EVENT_MOUSE_MOTION) {
 		g_MouseAbsX = evt->motion.x;
 		g_MouseAbsY = evt->motion.y;
+		g_MouseIsVirtual = evt->motion.which == SDL_TOUCH_MOUSEID;
+		g_MouseLastDevice = evt->motion.which;
 	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
 		g_MouseButtonsPressed[evt->button.button] = 1;
 		g_MouseButtonsReleased[evt->button.button] = 0;
+		g_MouseIsVirtual = evt->button.which == SDL_TOUCH_MOUSEID;
+		g_MouseLastDevice = evt->button.which;
 	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_UP) {
 		g_MouseButtonsPressed[evt->button.button] = 0;
 		g_MouseButtonsReleased[evt->button.button] = 1;
-	} else if (evt->type == SDL_EVENT_MOUSE_WHEEL) g_MouseAbsZ += evt->wheel.y;
+		g_MouseIsVirtual = evt->button.which == SDL_TOUCH_MOUSEID;
+		g_MouseLastDevice = evt->button.which;
+	} else if (evt->type == SDL_EVENT_MOUSE_WHEEL) {
+		g_MouseAbsZ += evt->wheel.y;
+		g_MouseIsVirtual = evt->wheel.which == SDL_TOUCH_MOUSEID;
+		g_MouseLastDevice = evt->wheel.which;
+	}
 	else if (evt->type == SDL_EVENT_FINGER_DOWN) {
 		g_TouchLastDevice = evt->tfinger.touchID;
 		on_touch_finger_down(evt->tfinger.touchID, {evt->tfinger.fingerID, evt->tfinger.x, evt->tfinger.y, evt->tfinger.pressure});
@@ -954,6 +968,9 @@ void RegisterInput(asIScriptEngine* engine) {
 	engine->RegisterGlobalProperty(_O("const float MOUSE_ABSOLUTE_X"), &g_MouseAbsX);
 	engine->RegisterGlobalProperty(_O("const float MOUSE_ABSOLUTE_Y"), &g_MouseAbsY);
 	engine->RegisterGlobalProperty(_O("const float MOUSE_ABSOLUTE_Z"), &g_MouseAbsZ);
+	engine->RegisterGlobalProperty(_O("const bool MOUSE_IS_VIRTUAL"), &g_MouseIsVirtual);
+	engine->RegisterGlobalProperty(_O("const uint KEYBOARD_LAST_DEVICE"), &g_KeyboardLastDevice);
+	engine->RegisterGlobalProperty(_O("const uint MOUSE_LAST_DEVICE"), &g_MouseLastDevice);
 	engine->RegisterEnumValue("touch_device_type", "TOUCH_DEVICE_TYPE_INVALID", SDL_TOUCH_DEVICE_INVALID);
 	engine->RegisterEnumValue("touch_device_type", "TOUCH_DEVICE_DIRECT", SDL_TOUCH_DEVICE_DIRECT);
 	engine->RegisterEnumValue("touch_device_type", "TOUCH_DEVICE_INDIRECT_ABSOLUTE", SDL_TOUCH_DEVICE_INDIRECT_ABSOLUTE);
