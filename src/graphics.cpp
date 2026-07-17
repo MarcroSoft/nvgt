@@ -58,6 +58,26 @@ graphic* load_surface(const std::string& file) {
 	return s ? new graphic(s) : nullptr;
 }
 
+// Load image data already in memory, e.g. read out of a pack.
+static graphic* load_graphic_memory(const std::string& data, SDL_Surface* (SDLCALL* loader)(SDL_IOStream*, bool)) {
+	SDL_IOStream* io = SDL_IOFromConstMem(data.data(), data.size());
+	if (!io) return nullptr;
+	SDL_Surface* s = loader(io, true);
+	return s ? new graphic(s) : nullptr;
+}
+
+graphic* load_bmp_memory(const std::string& data) {
+	return load_graphic_memory(data, SDL_LoadBMP_IO);
+}
+
+graphic* load_png_memory(const std::string& data) {
+	return load_graphic_memory(data, SDL_LoadPNG_IO);
+}
+
+graphic* load_surface_memory(const std::string& data) {
+	return load_graphic_memory(data, SDL_LoadSurface_IO);
+}
+
 graphic* create_surface(int width, int height, unsigned int pixel_format) {
 	SDL_Surface* s = SDL_CreateSurface(width, height, (SDL_PixelFormat)pixel_format);
 	return s ? new graphic(s) : nullptr;
@@ -446,6 +466,9 @@ void RegisterGraphics(asIScriptEngine* engine) {
 	engine->RegisterGlobalFunction("graphic@ load_bmp(const string&in file)", asFUNCTION(load_bmp), asCALL_CDECL);
 	engine->RegisterGlobalFunction("graphic@ load_png(const string&in file)", asFUNCTION(load_png), asCALL_CDECL);
 	engine->RegisterGlobalFunction("graphic@ load_surface(const string&in file)", asFUNCTION(load_surface), asCALL_CDECL);
+	engine->RegisterGlobalFunction("graphic@ load_bmp_memory(const string&in data)", asFUNCTION(load_bmp_memory), asCALL_CDECL);
+	engine->RegisterGlobalFunction("graphic@ load_png_memory(const string&in data)", asFUNCTION(load_png_memory), asCALL_CDECL);
+	engine->RegisterGlobalFunction("graphic@ load_surface_memory(const string&in data)", asFUNCTION(load_surface_memory), asCALL_CDECL);
 	engine->RegisterGlobalFunction("graphic@ create_surface(int width, int height, pixel_format pixel_format)", asFUNCTION(create_surface), asCALL_CDECL);
 	
 	// graphics_texture
