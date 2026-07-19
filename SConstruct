@@ -13,6 +13,7 @@ Help("""
 		deps_path=path: Optional location where dependencies are stored? Defaults to a folder named after the platform in the repository root.
 		no_upx=0 or 1 (default 1): Disable UPX stubs?
 		no_plugins=0 or 1 (default 0): Disable the plugin system entirely?
+		plugins=name1,name2 (default all): Only build the listed plugins; combine with static_<name>_plugin=1 to link them into the binaries.
 		no_sapi32host=0 or 1 (default 0): Disable building the 32 bit SAPI host (nvgt_sapi32host.exe) which allows access to 32 bit only SAPI voices on windows?
 		no_shared_plugins=0 or 1 (default 0): Only compile plugins statically?
 		no_stubs=0 or 1 (default 0): Disable compilation of all stubs?
@@ -91,9 +92,12 @@ if  ARGUMENTS.get("no_plugins", "0") == "0":
 	if env["NVGT_TARGET"] == "android":
 		plugin_env.Append(CXXFLAGS = ["-fPIC"])
 		plugin_env["SHLIBPREFIX"] = ""
+	# plugins=name1,name2 restricts the build to just those plugins; useful on targets like ios where only some plugins build.
+	plugin_filter = [p for p in ARGUMENTS.get("plugins", "").split(",") if p]
 	# Then loop through all known plugins and build them.
 	for s in Glob("plugin/*/_SConscript") + Glob("plugin/*/SConscript") + Glob("extra/plugin/integrated/*/_SConscript") + Glob("extra/plugin/integrated/*/SConscript"):
 		plugname = str(s).split(os.path.sep)[-2]
+		if plugin_filter and plugname not in plugin_filter: continue
 		if ARGUMENTS.get(f"no_{plugname}_plugin", "0") == "1": continue
 		if ARGUMENTS.get(f"static_{plugname}_plugin", "0") == "1" and not plugname in static_plugins: static_plugins.append(plugname)
 		# Build the plugin.
