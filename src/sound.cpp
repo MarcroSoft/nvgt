@@ -200,6 +200,10 @@ float pan_db_to_linear(float db) {
 	float l = ma_volume_db_to_linear(fabs(db) * -1.0f);
 	return db > 0 ? 1.0f - l : -1.0f + l;
 }
+// Volume conversions between raw linear amplitude (0..1) and db (0 = full, negative = quieter), exposed so callers
+// can move between the two scales explicitly. These are thin wrappers over MiniAudio's own helpers.
+float volume_linear_to_db(float linear) { return ma_volume_linear_to_db(linear); }
+float volume_db_to_linear(float db) { return ma_volume_db_to_linear(db); }
 // Callbacks for MiniAudio to write raw PCM to wav in memory.
 ma_result wav_write_proc(ma_encoder *pEncoder, const void *pBufferIn, size_t bytesToWrite, size_t *pBytesWritten) {
 	std::ostream *stream = static_cast<std::ostream *>(pEncoder->pUserData);
@@ -2805,6 +2809,11 @@ void RegisterSoundsystem(asIScriptEngine *engine) {
 	engine->RegisterGlobalFunction("vector sound_get_listener_position(uint listener_index = 0)", asFUNCTION(sound_get_listener_position), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool sound_set_listener_position(float x, float y, float z, uint listener_index = 0)", asFUNCTION(sound_set_listener_position), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool sound_set_listener_position(const vector&in position, uint listener_index = 0)", asFUNCTION(sound_set_listener_position_vector), asCALL_CDECL);
+	// Pan/volume scale conversions. On the default engine (PERCENTAGE_ATTRIBUTES) pan and volume are expressed in BGT-style db; these let callers convert to and from raw linear values (pan -1..1, volume 0..1 amplitude) explicitly.
+	engine->RegisterGlobalFunction("float pan_linear_to_db(float linear)", asFUNCTION(pan_linear_to_db), asCALL_CDECL);
+	engine->RegisterGlobalFunction("float pan_db_to_linear(float db)", asFUNCTION(pan_db_to_linear), asCALL_CDECL);
+	engine->RegisterGlobalFunction("float volume_linear_to_db(float linear)", asFUNCTION(volume_linear_to_db), asCALL_CDECL);
+	engine->RegisterGlobalFunction("float volume_db_to_linear(float db)", asFUNCTION(volume_db_to_linear), asCALL_CDECL);
 	engine->RegisterGlobalFunction("void set_sound_default_decryption_key(const string& in key) property", asFUNCTION(set_default_decryption_key), asCALL_CDECL);
 	engine->RegisterGlobalFunction("void set_sound_default_pack(pack_interface@ storage) property", asFUNCTION(set_sound_default_storage), asCALL_CDECL);
 	engine->RegisterGlobalFunction("pack_interface@ get_sound_default_pack() property", asFUNCTION(get_sound_default_storage), asCALL_CDECL);

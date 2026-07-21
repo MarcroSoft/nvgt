@@ -1,0 +1,21 @@
+/**
+	Convert a BGT-style db pan value back to a linear pan position.
+	float pan_db_to_linear(float db);
+	## Arguments:
+		float db: a pan on the db curve used by the pan property when the engine has the percentage_attributes flag (the default).
+	## Returns:
+		float: the equivalent linear pan from -1.0 (fully left) through 0.0 (centre) to 1.0 (fully right).
+	## Remarks:
+		This is the inverse of pan_linear_to_db. Use it to interpret the pan property as a plain linear position, for example to display it or to feed it to something that expects linear values.
+*/
+
+// Example:
+void main() {
+	sound s;
+	s.load("music.ogg");
+	s.pan = pan_linear_to_db(-0.25);
+	s.play();
+	// Read it back as a linear value.
+	float linear = pan_db_to_linear(s.pan);
+	alert("pan", "linear pan is " + linear); // Approximately -0.25.
+}

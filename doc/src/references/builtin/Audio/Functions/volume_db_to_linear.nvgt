@@ -1,0 +1,20 @@
+/**
+	Convert a db volume value back to a linear amplitude.
+	float volume_db_to_linear(float db);
+	## Arguments:
+		float db: a volume in db, as used by the volume property (0 is full, negative values are quieter).
+	## Returns:
+		float: the equivalent linear amplitude, where 1.0 is full volume, 0.5 is half amplitude and 0.0 is silence.
+	## Remarks:
+		This is the inverse of volume_linear_to_db. Use it to interpret the volume property as a linear amplitude, for example to drive a volume meter.
+*/
+
+// Example:
+void main() {
+	sound s;
+	s.load("music.ogg");
+	s.volume = volume_linear_to_db(0.5);
+	s.play();
+	float amplitude = volume_db_to_linear(s.volume);
+	alert("volume", "linear amplitude is " + amplitude); // Approximately 0.5.
+}

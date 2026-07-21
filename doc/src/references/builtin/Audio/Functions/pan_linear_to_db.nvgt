@@ -1,0 +1,18 @@
+/**
+	Convert a linear pan position to the BGT-style db value that the default audio engine expects.
+	float pan_linear_to_db(float linear);
+	## Arguments:
+		float linear: a linear pan from -1.0 (fully left) through 0.0 (centre) to 1.0 (fully right).
+	## Returns:
+		float: the equivalent pan on the db curve used by pan when the engine has the percentage_attributes flag (the default).
+	## Remarks:
+		The default engine expresses pan on a BGT-compatible db curve, where a small magnitude already pushes most of the way to one side. If you would rather think in a plain linear pan, set the pan property from this function. pan_db_to_linear performs the inverse conversion.
+*/
+
+// Example:
+void main() {
+	sound s;
+	s.load("music.ogg");
+	s.pan = pan_linear_to_db(0.5); // Halfway to the right on a linear scale.
+	s.play_wait();
+}
