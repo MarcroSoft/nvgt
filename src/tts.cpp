@@ -95,7 +95,7 @@ class fallback_voice_engine : public tts_engine_impl {
 		return (int32_t)lround(300.0 + (r - 3.0) * (90.0 - 300.0) / (17.0 - 3.0));
 	}
 public:
-	fallback_voice_engine() : tts_engine_impl("fallback"), rate(10), pitch(122), volume(1.0f) {}
+	fallback_voice_engine() : tts_engine_impl("fallback"), rate(10), pitch(264), volume(1.0f) {}
 	tts_pcm_generation_state get_pcm_generation_state() override { return PCM_PREFERRED; }
 	tts_audio_data* speak_to_pcm(const string &text) override {
 		if (text.empty()) return nullptr;
@@ -127,7 +127,7 @@ public:
 	void set_pitch(float pitch) override { this->pitch = pitch; }
 	void set_volume(float volume) override { this->volume = volume; }
 	bool get_rate_range(float& minimum, float& midpoint, float& maximum) override { minimum = 3; midpoint = 10; maximum = 17; return true; }
-	bool get_pitch_range(float& minimum, float& midpoint, float& maximum) override { minimum = 75; midpoint = 122; maximum = 300; return true; }
+	bool get_pitch_range(float& minimum, float& midpoint, float& maximum) override { minimum = 75; midpoint = 264; maximum = 400; return true; }
 	bool get_volume_range(float& minimum, float& midpoint, float& maximum) override { minimum = 0; midpoint = 0.5; maximum = 1.0; return true; }
 	string get_voice_name(int index) override { return index == 0? "builtin fallback voice" : ""; }
 };
