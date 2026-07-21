@@ -6,6 +6,7 @@ on:
       - main
       - fallback
       - lua-plugin
+      - replace-speech-with-sharpvox
     tags:
       - "*"
     paths-ignore:

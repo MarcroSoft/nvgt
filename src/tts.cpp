@@ -1,6 +1,6 @@
 /* tts.cpp - code for engine based text to speech system
  * On windows this is SAPI, on macOS it is NSSpeech/AVSpeechSynthesizer, on linux speech dispatcher etc.
- * If no OS based speech system can be found for a given platform, a derivative of RSynth that is built into NVGT will be used instead.
+ * If no OS based speech system can be found for a given platform, the SharpVox formant synthesizer that is built into NVGT will be used instead.
  *
  * NVGT - NonVisual Gaming Toolkit
  * Copyright (c) 2022-2025 Sam Tupy
@@ -22,6 +22,7 @@
 #include <Poco/String.h>
 #include <Poco/StringTokenizer.h>
 #include <obfuscate.h>
+#include <SharpVox.h>
 #include "nvgt_angelscript.h"
 #include "tts.h"
 #include "misc_functions.h"
@@ -80,25 +81,44 @@ static void* tts_trim(tts_audio_data* data, float begin_db = -60, float end_db =
 tts_audio_data::tts_audio_data(tts_engine* eng, void* dat, unsigned int size, unsigned int rate, unsigned int chans, unsigned int bits, void* ctx) : engine(eng), data(dat), size_in_bytes(size), sample_rate(rate), channels(chans), bitsize(bits), context(ctx) {}
 void tts_audio_data::free() { if (engine) engine->free_pcm(this); }
 
-// Fallback voice engine using RSynth
+// Fallback voice engine using the builtin SharpVox formant synthesizer.
+// SharpVox streams mono 16-bit PCM at speaker.SampleRate. Rate and pitch are baked into the
+// voice when it is (re)built, so we push them in and rebuild before each synthesis; volume has
+// no engine-side control, so it is applied as a linear gain on the rendered samples.
 class fallback_voice_engine : public tts_engine_impl {
+	SharpVox::SharpVoxSpeaker speaker;
 	float rate, pitch, volume;
+	// Map our exposed rate (3 slow .. 10 .. 17 fast) to a SharpVox per-phoneme duration
+	// (larger = slower), so higher rate means faster speech as elsewhere in NVGT.
+	static int32_t rate_to_sharpvox(float r) {
+		if (r < 3) r = 3; else if (r > 17) r = 17;
+		return (int32_t)lround(300.0 + (r - 3.0) * (90.0 - 300.0) / (17.0 - 3.0));
+	}
 public:
-	fallback_voice_engine() : tts_engine_impl("fallback"), rate(10), pitch(1330), volume(60) {}
+	fallback_voice_engine() : tts_engine_impl("fallback"), rate(10), pitch(122), volume(1.0f) {}
 	tts_pcm_generation_state get_pcm_generation_state() override { return PCM_PREFERRED; }
 	tts_audio_data* speak_to_pcm(const string &text) override {
 		if (text.empty()) return nullptr;
-		int samples;
-		char *data = (char *)speech_gen(&samples, text.c_str(), 20 - rate, pitch, volume, NULL); // smaller rate values mean faster so we must reverse the rate value here.
-		if (!data) return nullptr;
-		return new tts_audio_data(this, data, samples * 4, 44100, 2, 16);
-	}
-	void free_pcm(tts_audio_data* data) override {
-		if (data && data->data) {
-			speech_free((short *)data->data, NULL);
-			data->data = nullptr;
+		speaker.Rate = rate_to_sharpvox(rate);
+		speaker.PitchHz = (int32_t)lround(pitch);
+		speaker.ApplyVoiceInPlace();
+		vector<int16_t> samples;
+		try {
+			speaker.Speak(text, [](SharpVox::SharpVoxSpeaker*, const int16_t* buf, int32_t len, void* ud) {
+				auto* out = static_cast<vector<int16_t>*>(ud);
+				out->insert(out->end(), buf, buf + len);
+			}, &samples);
+		} catch (...) { return nullptr; }
+		if (samples.empty()) return nullptr;
+		if (volume < 0.999f) for (int16_t& s : samples) {
+			long v = lround(s * volume);
+			s = (int16_t)(v > 32767? 32767 : v < -32768? -32768 : v);
 		}
-		tts_engine_impl::free_pcm(data);
+		unsigned int bytes = (unsigned int)(samples.size() * sizeof(int16_t));
+		void* data = malloc(bytes);
+		if (!data) return nullptr;
+		memcpy(data, samples.data(), bytes);
+		return new tts_audio_data(this, data, bytes, speaker.SampleRate, 1, 16);
 	}
 	float get_rate() override { return rate; }
 	float get_pitch() override { return pitch; }
@@ -107,8 +127,8 @@ public:
 	void set_pitch(float pitch) override { this->pitch = pitch; }
 	void set_volume(float volume) override { this->volume = volume; }
 	bool get_rate_range(float& minimum, float& midpoint, float& maximum) override { minimum = 3; midpoint = 10; maximum = 17; return true; }
-	bool get_pitch_range(float& minimum, float& midpoint, float& maximum) override { minimum = 400; midpoint = 1330; maximum = 4000; return true; }
-	bool get_volume_range(float& minimum, float& midpoint, float& maximum) override { minimum = 0; midpoint = 30; maximum = 70; return true; }
+	bool get_pitch_range(float& minimum, float& midpoint, float& maximum) override { minimum = 75; midpoint = 122; maximum = 300; return true; }
+	bool get_volume_range(float& minimum, float& midpoint, float& maximum) override { minimum = 0; midpoint = 0.5; maximum = 1.0; return true; }
 	string get_voice_name(int index) override { return index == 0? "builtin fallback voice" : ""; }
 };
 

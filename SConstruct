@@ -73,7 +73,7 @@ elif env["NVGT_TARGET"] == "android":
 	SConscript("build/android_sconscript.py", exports = ["env"])
 	env.Append(LIBS = common_libs + ["z", "GLESv1_CM", "GLESv2", "OpenSLES", "log", "android"])
 env.Append(CPPDEFINES = ["POCO_STATIC", "POCO_NO_AUTOMATIC_LIBS", "UNIVERSAL_SPEECH_STATIC", "DEBUG" if ARGUMENTS.get("debug", "0") == "1" else "NDEBUG", "UNICODE"])
-env.Append(CPPPATH = ["#ASAddon/include", "#dep"], LIBPATH = ["#build/lib"])
+env.Append(CPPPATH = ["#ASAddon/include", "#dep", "#dep/sharpvox/platform/lib"], LIBPATH = ["#build/lib"])
 env["PLUGIN_DEST_DIR"] = "#release/lib_android" if env["NVGT_TARGET"] == "android" else "#release/lib"
 
 # plugins

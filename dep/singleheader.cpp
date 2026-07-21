@@ -31,7 +31,5 @@
 #include <miniaudio.h>
 #define RND_IMPLEMENTATION
 #include "rnd.h"
-#define SPEECH_IMPLEMENTATION
-#include "speech.h"
 #define THREAD_IMPLEMENTATION
 #include "thread.h"
