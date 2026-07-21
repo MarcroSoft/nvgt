@@ -135,7 +135,7 @@ This section contains options that are directly related to the compiling/bundlin
 * product_version = string default 1.0: human friendly version string to display to users in bundles
 * product_version_code = integer default (UnixEpoch / 60): an increasing 32 bit integer that programatically denotes the version of your application (default is usually ok)
 * product_version_semantic = string default 1.0.0: a numeric version string in the form major.minor.patch used by some platforms
-* shared_library_excludes = string default "plist TrueAudioNext GPUUtilities systemd_notify sqlite git2 curl": Partial names of shared libraries that should not be copied from NVGT's source lib directory into the bundled product.
+* shared_library_excludes = string default "": Space, comma, or semicolon separated partial names of shared libraries that should not be copied into the bundled product even if they would otherwise be included. For example `phonon SAAPI64 nvdaControllerClient64 zdsrapi nvgt_sapi32host` omits the spatial audio and screen reader libraries from a game that does not use them.
 * shared_library_recopy: If this is set, any shared libraries will be copied from scratch instead of only if they're newer than already copied.
 * windows_bundle = integer default 2: 0 no bundle, 1 folder, 2 .zip, 3 both folder and .zip
 * windows_console: when compiling for windows, build with the console subsystem instead of GUI

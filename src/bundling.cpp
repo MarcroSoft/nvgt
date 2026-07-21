@@ -320,6 +320,17 @@ protected:
 			File(Path(g.filesystem_path).makeAbsolute(Path(get_input_file()).makeParent()).toString()).copyTo(p.toString());
 		}
 	}
+	bool is_library_excluded(const string& library_basename) {
+		// Returns true if the given library base name matches an entry in the build.shared_library_excludes
+		// configuration option, a space, comma, or semicolon separated list of partial library names. This lets
+		// a project opt out of bundling libraries it does not use, for example phonon or the screen reader clients.
+		const string excludes = config.getString("build.shared_library_excludes", "");
+		if (excludes.empty()) return false;
+		StringTokenizer tok(excludes, " ,;", StringTokenizer::TOK_TRIM | StringTokenizer::TOK_IGNORE_EMPTY);
+		for (const string& ex : tok)
+			if (library_basename.find(ex) != string::npos) return true;
+		return false;
+	}
 	void copy_shared_libraries(const Path& libpath) {
 		// Copy any needed shared libraries to the output package, handling excludes and already existent files.
 		set_status("copying libraries...");
@@ -339,6 +350,8 @@ protected:
 				break;
 			}
 			if (!included) continue;
+			// Allow a project to opt out of bundling specific libraries via build.shared_library_excludes.
+			if (is_library_excluded(Path(library).getBaseName())) continue;
 			// Now check if the same or a newer version of this library has already been copied and skip it if so, in order to save time.
 			File lib = library;
 			File destF = Path(libpath).append(Path(library).getFileName()).toString();
@@ -898,6 +911,7 @@ protected:
 		Path plugin_dest = Path(workplace.path()).append("lib/arm64-v8a");
 		plugin_dest.makeDirectory();
 		for (const string& lib : g_bundle_libraries) {
+			if (is_library_excluded(lib)) continue;
 			Path src = Path(plugin_src).append(lib + ".so");
 			if (File(src).exists()) {
 				File(src).copyTo(plugin_dest.toString());
