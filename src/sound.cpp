@@ -307,6 +307,10 @@ class audio_engine_impl final : public audio_node_impl, public virtual audio_eng
 
 public:
 	engine_flags flags;
+	// Registry of mixers/sounds with an active pan or pitch slide. Slides are advanced from read() (the audio thread) and mutated by script threads, so all access is guarded by slide_mutex. has_active_slides lets read() skip the lock entirely when nothing is sliding.
+	std::mutex slide_mutex;
+	std::unordered_set<mixer*> sliding_mixers;
+	std::atomic<bool> has_active_slides{false};
 	audio_engine_impl(int flags, int sample_rate, int channels) : audio_node_impl(nullptr, this), engine(nullptr), resource_manager(nullptr), script_data_callback(nullptr), engine_endpoint(nullptr), flags(static_cast<engine_flags>(flags)) {
 		if (channels > MA_MAX_CHANNELS) throw runtime_error(Poco::format("exceeded maximum channel count of %d", MA_MAX_CHANNELS));
 		init_sound();
@@ -443,7 +447,19 @@ public:
 		}
 		return (g_soundsystem_last_error = ma_engine_start(&*engine)) == MA_SUCCESS;
 	}
-	bool read(void *buffer, unsigned long long frame_count, unsigned long long *frames_read) override { return engine ? (g_soundsystem_last_error = ma_engine_read_pcm_frames(&*engine, buffer, frame_count, frames_read)) == MA_SUCCESS : false; }
+	bool read(void *buffer, unsigned long long frame_count, unsigned long long *frames_read) override {
+		if (!engine) return false;
+		// Advance any active pan/pitch slides just before mixing this block so the interpolated values apply to the frames we're about to render. Each sound advances on its own playback clock inside process_slides().
+		if (has_active_slides.load(std::memory_order_acquire)) {
+			std::lock_guard<std::mutex> lock(slide_mutex);
+			for (auto it = sliding_mixers.begin(); it != sliding_mixers.end();) {
+				if ((*it)->process_slides()) ++it;
+				else it = sliding_mixers.erase(it);
+			}
+			has_active_slides.store(!sliding_mixers.empty(), std::memory_order_release);
+		}
+		return (g_soundsystem_last_error = ma_engine_read_pcm_frames(&*engine, buffer, frame_count, frames_read)) == MA_SUCCESS;
+	}
 	CScriptArray *read_script(unsigned long long frame_count) override {
 		if (!engine)
 			return nullptr;
@@ -1081,6 +1097,14 @@ public:
 	}
 };
 audio_opus_encoder* audio_opus_encoder::create(audio_engine* e) { return new audio_opus_encoder_impl(e); }
+// State for a single linear parameter slide (pan or pitch). Values are stored in native MiniAudio units so process_slides() can push them without repeating any flag conversions. Times are in the sound's own PCM-frame clock (ma_sound_get_time_in_pcm_frames).
+struct param_slide {
+	float start_value = 0.0f;
+	float end_value = 0.0f;
+	ma_uint64 start_frame = 0;
+	ma_uint64 duration_frames = 0;
+	bool active = false;
+};
 class mixer_impl : public audio_node_impl, public virtual mixer {
 	friend class audio_node_impl;
 	// In miniaudio, a sound_group is really just a sound. A typical ma_sound_group_x function looks like float ma_sound_group_get_pan(const ma_sound_group* pGroup) { return ma_sound_get_pan(pGroup); }.
@@ -1093,6 +1117,7 @@ protected:
 	mutex spatialization_params_mutex;
 	audio_node_chain* node_chain;
 	audio_node_chain* effects_chain;
+	param_slide pan_slide, pitch_slide; // Active pan/pitch slides. Accessed under the parent engine's slide_mutex.
 public:
 	mixer_impl(audio_engine *e, bool sound_group = true) : audio_node_impl(nullptr, e), snd(nullptr), shape(nullptr), node_chain(audio_node_chain::create(nullptr, nullptr, e)), effects_chain(nullptr), parent_mixer(nullptr), spatializer(nullptr) {
 		init_sound();
@@ -1108,6 +1133,13 @@ public:
 		play();
 	}
 	~mixer_impl() {
+		// If we're mid-slide, remove ourselves from the engine's registry before anything else so the audio thread can't touch this object after it starts being destroyed. Non-sliding sounds pay nothing here.
+		if (pan_slide.active || pitch_slide.active) {
+			audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine()); // audio_engine is a virtual base, so this downcast needs dynamic_cast.
+			std::lock_guard<std::mutex> lock(e->slide_mutex);
+			e->sliding_mixers.erase(this);
+			e->has_active_slides.store(!e->sliding_mixers.empty(), std::memory_order_release);
+		}
 		stop();
 		unique_lock<mutex> lock(spatialization_params_mutex);
 		if (spatializer) {
@@ -1255,8 +1287,10 @@ public:
 	}
 	float get_volume() const override { return snd ? (get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? ma_volume_linear_to_db(ma_sound_get_volume(&*snd)) : ma_sound_get_volume(&*snd)) : NAN; }
 	void set_pan(float pan) override {
-		if (snd)
+		if (snd) {
+			cancel_slide(pan_slide); // A direct pan change wins over any slide in progress.
 			ma_sound_set_pan(&*snd, get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? pan_db_to_linear(pan) : pan);
+		}
 	}
 	float get_pan() const override {
 		return snd ? (get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? pan_linear_to_db(ma_sound_get_pan(&*snd)) : ma_sound_get_pan(&*snd)) : NAN;
@@ -1269,11 +1303,113 @@ public:
 		return snd ? ma_sound_get_pan_mode(&*snd) : ma_pan_mode_balance;
 	}
 	void set_pitch(float pitch) override {
-		if (snd)
+		if (snd) {
+			cancel_slide(pitch_slide); // A direct pitch change wins over any slide in progress.
 			ma_sound_set_pitch(&*snd, get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? pitch / 100.0f : pitch);
+		}
 	}
 	float get_pitch() const override {
 		return snd ? (get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? ma_sound_get_pitch(&*snd) * 100 : ma_sound_get_pitch(&*snd)) : NAN;
+	}
+	// --- Pan/pitch sliding ---------------------------------------------------
+	// Cancel a slide and, if this was the last active slide on the sound, drop it from the engine registry. Cheap no-op when the slide isn't active, so the pan/pitch setters can call it unconditionally.
+	void cancel_slide(param_slide& s) {
+		if (!s.active) return;
+		audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine());
+		std::lock_guard<std::mutex> lock(e->slide_mutex);
+		s.active = false;
+		if (!pan_slide.active && !pitch_slide.active) {
+			e->sliding_mixers.erase(this);
+			e->has_active_slides.store(!e->sliding_mixers.empty(), std::memory_order_release);
+		}
+	}
+	// Begin a slide of the given parameter to native_target (already in MiniAudio units) over duration_frames, starting from the current value. Registers the sound with the engine so read() will advance it.
+	void start_slide(param_slide& s, float current_native, float native_target, ma_uint64 duration_frames) {
+		audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine());
+		std::lock_guard<std::mutex> lock(e->slide_mutex);
+		s.start_value = current_native;
+		s.end_value = native_target;
+		s.start_frame = ma_sound_get_time_in_pcm_frames(&*snd);
+		s.duration_frames = duration_frames;
+		s.active = true;
+		e->sliding_mixers.insert(this);
+		e->has_active_slides.store(true, std::memory_order_release);
+	}
+	void slide_pan(float target, ma_uint64 length) override {
+		if (get_engine()->get_flags() & audio_engine::DURATIONS_IN_FRAMES)
+			slide_pan_in_frames(target, length);
+		else
+			slide_pan_in_milliseconds(target, length);
+	}
+	void slide_pan_in_frames(float target, ma_uint64 frames) override {
+		if (!snd) return;
+		float native = get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? pan_db_to_linear(target) : target;
+		if (frames == 0) { cancel_slide(pan_slide); ma_sound_set_pan(&*snd, native); return; } // Zero duration means apply immediately.
+		start_slide(pan_slide, ma_sound_get_pan(&*snd), native, frames);
+	}
+	void slide_pan_in_milliseconds(float target, ma_uint64 milliseconds) override {
+		if (!snd) return;
+		slide_pan_in_frames(target, milliseconds * (ma_uint64)get_engine()->get_sample_rate() / 1000);
+	}
+	void slide_pitch(float target, ma_uint64 length) override {
+		if (get_engine()->get_flags() & audio_engine::DURATIONS_IN_FRAMES)
+			slide_pitch_in_frames(target, length);
+		else
+			slide_pitch_in_milliseconds(target, length);
+	}
+	void slide_pitch_in_frames(float target, ma_uint64 frames) override {
+		if (!snd) return;
+		float native = get_engine()->get_flags() & audio_engine::PERCENTAGE_ATTRIBUTES ? target / 100.0f : target;
+		if (frames == 0) { cancel_slide(pitch_slide); ma_sound_set_pitch(&*snd, native); return; } // Zero duration means apply immediately.
+		start_slide(pitch_slide, ma_sound_get_pitch(&*snd), native, frames);
+	}
+	void slide_pitch_in_milliseconds(float target, ma_uint64 milliseconds) override {
+		if (!snd) return;
+		slide_pitch_in_frames(target, milliseconds * (ma_uint64)get_engine()->get_sample_rate() / 1000);
+	}
+	bool get_pan_sliding() const override {
+		audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine());
+		std::lock_guard<std::mutex> lock(e->slide_mutex);
+		return pan_slide.active;
+	}
+	bool get_pitch_sliding() const override {
+		audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine());
+		std::lock_guard<std::mutex> lock(e->slide_mutex);
+		return pitch_slide.active;
+	}
+	bool get_sliding() const override {
+		audio_engine_impl* e = dynamic_cast<audio_engine_impl*>(get_engine());
+		std::lock_guard<std::mutex> lock(e->slide_mutex);
+		return pan_slide.active || pitch_slide.active;
+	}
+	// Called by the engine on the audio thread under slide_mutex. Advances each active slide against this sound's own playback clock and pushes the interpolated value. Returns true while any slide is still running so the engine knows to keep us registered.
+	bool process_slides() override {
+		if (!snd) { pan_slide.active = false; pitch_slide.active = false; return false; }
+		ma_uint64 now = ma_sound_get_time_in_pcm_frames(&*snd);
+		if (pan_slide.active) {
+			float v;
+			// If the clock jumped backwards (the sound was stopped/replayed or seeked before the slide start) treat the slide as finished rather than underflowing.
+			if (pan_slide.duration_frames == 0 || now < pan_slide.start_frame || now >= pan_slide.start_frame + pan_slide.duration_frames) {
+				v = pan_slide.end_value;
+				pan_slide.active = false;
+			} else {
+				double t = double(now - pan_slide.start_frame) / double(pan_slide.duration_frames);
+				v = pan_slide.start_value + float(t) * (pan_slide.end_value - pan_slide.start_value);
+			}
+			ma_sound_set_pan(&*snd, v);
+		}
+		if (pitch_slide.active) {
+			float v;
+			if (pitch_slide.duration_frames == 0 || now < pitch_slide.start_frame || now >= pitch_slide.start_frame + pitch_slide.duration_frames) {
+				v = pitch_slide.end_value;
+				pitch_slide.active = false;
+			} else {
+				double t = double(now - pitch_slide.start_frame) / double(pitch_slide.duration_frames);
+				v = pitch_slide.start_value + float(t) * (pitch_slide.end_value - pitch_slide.start_value);
+			}
+			if (v > 0.0f) ma_sound_set_pitch(&*snd, v); // MiniAudio requires a positive pitch; guard against a target that would resolve to zero/negative.
+		}
+		return pan_slide.active || pitch_slide.active;
 	}
 	void set_spatialization_enabled(bool enabled) override {
 		if (snd)
@@ -2347,6 +2483,15 @@ template<class T> void RegisterSoundsystemMixer(asIScriptEngine *engine, const s
 	engine->RegisterObjectMethod(type.c_str(), "void set_fade_in_frames(float start_volume, float end_volume, uint64 length_frames)", asFUNCTION((virtual_call < T, &T::set_fade_in_frames, void, float, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(type.c_str(), "void set_fade_in_milliseconds(float start_volume, float end_volume, uint64 length_ms)", asFUNCTION((virtual_call < T, &T::set_fade_in_milliseconds, void, float, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(type.c_str(), "float get_current_fade_volume() const property", asFUNCTION((virtual_call < T, &T::get_current_fade_volume, float >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pan(float target, uint64 length)", asFUNCTION((virtual_call < T, &T::slide_pan, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pan_in_frames(float target, uint64 length_frames)", asFUNCTION((virtual_call < T, &T::slide_pan_in_frames, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pan_in_milliseconds(float target, uint64 length_ms)", asFUNCTION((virtual_call < T, &T::slide_pan_in_milliseconds, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pitch(float target, uint64 length)", asFUNCTION((virtual_call < T, &T::slide_pitch, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pitch_in_frames(float target, uint64 length_frames)", asFUNCTION((virtual_call < T, &T::slide_pitch_in_frames, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "void slide_pitch_in_milliseconds(float target, uint64 length_ms)", asFUNCTION((virtual_call < T, &T::slide_pitch_in_milliseconds, void, float, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "bool get_pan_sliding() const property", asFUNCTION((virtual_call < T, &T::get_pan_sliding, bool >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "bool get_pitch_sliding() const property", asFUNCTION((virtual_call < T, &T::get_pitch_sliding, bool >)), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type.c_str(), "bool get_sliding() const property", asFUNCTION((virtual_call < T, &T::get_sliding, bool >)), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(type.c_str(), "void set_start_time(uint64 absolute_time) property", asFUNCTION((virtual_call < T, &T::set_start_time, void, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(type.c_str(), "void set_stop_time(uint64 absolute_time)", asFUNCTION((virtual_call < T, &T::set_stop_time, void, ma_uint64 >)), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(type.c_str(), "bool get_playing() const property", asFUNCTION((virtual_call < T, &T::get_playing, bool >)), asCALL_CDECL_OBJFIRST);

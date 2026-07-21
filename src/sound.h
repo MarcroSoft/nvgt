@@ -324,6 +324,17 @@ public:
 	virtual void set_fade_in_frames(float start_volume, float end_volume, ma_uint64 frames) = 0;
 	virtual void set_fade_in_milliseconds(float start_volume, float end_volume, ma_uint64 milliseconds) = 0;
 	virtual float get_current_fade_volume() const = 0;
+	// Smoothly slide pan or pitch from their current value to a target over a duration. Unlike volume fade (which MiniAudio implements natively), these are driven by nvgt itself from the engine read path using each sound's own playback clock, so they pause and resume with the sound.
+	virtual void slide_pan(float target, ma_uint64 length) = 0; // depends on DURATIONS_IN_FRAMES flag in parent engine
+	virtual void slide_pan_in_frames(float target, ma_uint64 frames) = 0;
+	virtual void slide_pan_in_milliseconds(float target, ma_uint64 milliseconds) = 0;
+	virtual void slide_pitch(float target, ma_uint64 length) = 0; // depends on DURATIONS_IN_FRAMES flag in parent engine
+	virtual void slide_pitch_in_frames(float target, ma_uint64 frames) = 0;
+	virtual void slide_pitch_in_milliseconds(float target, ma_uint64 milliseconds) = 0;
+	virtual bool get_pan_sliding() const = 0;
+	virtual bool get_pitch_sliding() const = 0;
+	virtual bool get_sliding() const = 0; // true if either a pan or pitch slide is currently running.
+	virtual bool process_slides() = 0; // internal: advance any active pan/pitch slides. Returns true while a slide remains active. Called by the engine on the audio thread; not exposed to script.
 	virtual void set_start_time(ma_uint64 absolute_time) = 0; // DURATIONS_IN_FRAMES
 	virtual void set_start_time_in_frames(ma_uint64 absolute_time) = 0;
 	virtual void set_start_time_in_milliseconds(ma_uint64 absolute_time) = 0;
