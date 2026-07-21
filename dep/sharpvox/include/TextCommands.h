@@ -4,11 +4,13 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+// PhonemeToken must be complete here: Segment holds a std::vector<PhonemeToken> data member, so
+// the vector's destructor is instantiated in this header, which libc++ (clang on macOS and the
+// Android NDK) requires. MSVC and libstdc++ tolerate the incomplete type, but Apple/Android do not.
+#include "../include/AudioProcessor.h"
 
 namespace SharpVox {
 
-// Forward declaration  PhonemeToken is defined in audio_processor.h / tts_engine.h.
-struct PhonemeToken;
 class KlattschParser;
 
 class EmbeddedCmd {
