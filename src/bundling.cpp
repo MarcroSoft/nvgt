@@ -335,9 +335,9 @@ protected:
 		// Copy any needed shared libraries to the output package, handling excludes and already existent files.
 		set_status("copying libraries...");
 		File libpathF(libpath);
-		// Determine whether to create, replace, or update shared libraries.
-		if (!libpathF.exists()) libpathF.createDirectories();
-		else if(config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
+		// If recopying, start fresh. Otherwise the directory is created lazily below, only once a library
+		// actually needs copying, so an empty lib folder is never added to the bundle when everything is excluded.
+		if (libpathF.exists() && config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
 		string source = get_nvgt_lib_directory(g_platform);
 		set<string> libs;
 		Glob::glob(Path(source).append("*").toString(), libs, Glob::GLOB_DOT_SPECIAL | Glob::GLOB_FOLLOW_SYMLINKS | Glob::GLOB_CASELESS);
@@ -356,6 +356,7 @@ protected:
 			File lib = library;
 			File destF = Path(libpath).append(Path(library).getFileName()).toString();
 			if (destF.exists() && destF.getLastModified() >= lib.getLastModified()) continue;
+			if (!libpathF.exists()) libpathF.createDirectories();
 			lib.copyTo(libpath.toString());
 		}
 	}
