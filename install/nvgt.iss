@@ -53,7 +53,6 @@
 	name: "plugins"; description: "Optional plugins"; types: custom
 	name: "plugins\curl"; description: "CURL"; types: custom
 	name: "plugins\git"; description: "Git"; types: custom
-	name: "plugins\lua"; description: "Lua scripting"; types: custom
 	name: "plugins\sqlite"; description: "SQLite3"; types: custom
 	name: "plugins\systemd_notify"; description: "systemd-notify"; types: custom
 	name: "stubs"; description: "Stubs"; types: custom
@@ -94,8 +93,6 @@
 	; Plugins: git
 	source: "release\lib\git2.dll"; DestDir: "{app}\lib"; components: plugins\git
 	source: "release\lib\git2nvgt.dll"; DestDir: "{app}\lib"; components: plugins\git
-	; Plugins: lua
-	source: "release\lib\lua.dll"; DestDir: "{app}\lib"; components: plugins\lua
 	; Plugins: sqlite
 	source: "release\lib\nvgt_sqlite.dll"; DestDir: "{app}\lib"; components: plugins\sqlite
 	; Plugins: systemd-notify
