@@ -286,14 +286,6 @@ template <class A, class V> V atomics_add_assign_fallback(A* obj, V arg) {
 template <class A, class V> V atomics_sub_assign_fallback(A* obj, V arg) {
 	return atomics_fetch_sub_fallback(obj, arg, std::memory_order_seq_cst) - arg;
 }
-// Wrappers instead of member pointers because some standard libraries declare notify_one/notify_all with differing
-// const qualification (GCC 11's __atomic_float has them const), which breaks the asMETHODPR cast.
-template <class A> void atomics_notify_one_wrapper(A* obj) {
-	obj->notify_one();
-}
-template <class A> void atomics_notify_all_wrapper(A* obj) {
-	obj->notify_all();
-}
 template<typename T>
 consteval const char* as_script_int_name() {
 	static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
@@ -334,8 +326,8 @@ template<typename atomic_type, typename divisible_type> void register_atomic_typ
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order success, memory_order failure)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("void wait(%s old, memory_order order = MEMORY_ORDER_SEQ_CST) const", regular_type_name).c_str(), asMETHODPR(atomic_type, wait, (divisible_type, std::memory_order) const noexcept, void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asFUNCTION(atomics_notify_one_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asFUNCTION(atomics_notify_all_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asMETHODPR(atomic_type, notify_one, () noexcept, void), asCALL_THISCALL);
+	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asMETHODPR(atomic_type, notify_all, () noexcept, void), asCALL_THISCALL);
 	// Begin type-specific atomics
 	if constexpr((std::is_integral_v<divisible_type> || std::is_floating_point_v<divisible_type>) && !std::is_same_v<divisible_type, bool>) {
 		// Older standard libraries (notably Apple's libc++) lack the C++20 floating point atomic member functions, so
@@ -410,14 +402,8 @@ void RegisterAtomics(asIScriptEngine* engine) {
 	register_atomic_type<std::atomic_int64_t, std::int64_t>(engine, "atomic_int64", "int64");
 	register_atomic_type<std::atomic_uint64_t, std::uint64_t>(engine, "atomic_uint64", "uint64");
 	register_atomic_type<std::atomic_bool, bool>(engine, "atomic_bool", "bool");
-	#ifdef __cpp_lib_atomic_lock_free_type_aliases
 	register_atomic_type<std::atomic_signed_lock_free, std::atomic_signed_lock_free::value_type>(engine, "atomic_signed_lock_free", as_script_int_name<std::atomic_signed_lock_free::value_type>());
 	register_atomic_type<std::atomic_unsigned_lock_free, std::atomic_unsigned_lock_free::value_type>(engine, "atomic_unsigned_lock_free", as_script_int_name<std::atomic_unsigned_lock_free::value_type>());
-	#else
-	// Standard libraries without the C++20 lock-free alias types (e.g. GCC 11) get 32 bit int atomics, which are lock-free on all supported targets.
-	register_atomic_type<std::atomic_int32_t, std::int32_t>(engine, "atomic_signed_lock_free", "int");
-	register_atomic_type<std::atomic_uint32_t, std::uint32_t>(engine, "atomic_unsigned_lock_free", "uint");
-	#endif
 	register_atomic_type<std::atomic<float>, float>(engine, "atomic_float", "float");
 	register_atomic_type<std::atomic<double>, double>(engine, "atomic_double", "double");
 	engine->RegisterGlobalFunction("void atomic_thread_fence(memory_order order)", asFUNCTION(std::atomic_thread_fence), asCALL_CDECL);
