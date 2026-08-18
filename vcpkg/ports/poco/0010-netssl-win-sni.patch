@@ -1,0 +1,26 @@
+NetSSL_Win: do not clobber the peer host name before the handshake
+
+SecureSocketImpl::stateClientConnected() unconditionally overwrote _peerHostName
+with the peer's IP address, discarding the name HTTPSClientSession had already
+supplied via setPeerHostName(). InitializeSecurityContextW then received that IP
+as the SNI server name, so hosts served from a name based virtual host answered
+with the wrong certificate or with 421 Misdirected Request.
+
+Guard the assignment the way stateClientHandshakeCondition() and
+stateServerHandshakeCondition() in the same file already do, so the peer address
+is only a fallback for when no name is known.
+
+diff --git a/NetSSL_Win/src/SecureSocketImpl.cpp b/NetSSL_Win/src/SecureSocketImpl.cpp
+index c6d38d8..39d3557 100644
+--- a/NetSSL_Win/src/SecureSocketImpl.cpp
++++ b/NetSSL_Win/src/SecureSocketImpl.cpp
+@@ -811,7 +811,8 @@ void SecureSocketImpl::stateError()
+ 
+ void SecureSocketImpl::stateClientConnected()
+ {
+-	_peerHostName = _pSocket->peerAddress().host().toString();
++	if (_peerHostName.empty())
++		_peerHostName = _pSocket->peerAddress().host().toString();
+ 	setState(ST_CLIENT_HSK_START);
+ }
+ 

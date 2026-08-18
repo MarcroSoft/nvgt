@@ -24,14 +24,24 @@
     "steam-audio-official",
     {
       "name": "openssl",
-      "default-features": false
+      "default-features": false,
+      "platform": "!windows"
     },
     {
       "name": "curl",
       "default-features": false,
       "features": [
         "openssl"
-      ]
+      ],
+      "platform": "!windows"
+    },
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "ssl"
+      ],
+      "platform": "windows"
     },
     {
       "name": "libplist",

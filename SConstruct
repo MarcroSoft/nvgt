@@ -51,6 +51,11 @@ if ARGUMENTS.get("debug", "0") == "1":
 # Platform setup and system libraries
 common_libs = ["PocoJSON", "PocoNet", "PocoNetSSL", "PocoUtil", "PocoXML", "PocoCrypto", "PocoFoundation", "expat", "angelscript", "SDL3_ttf", "freetype", "bz2", "enet", "reactphysics3d", "ssl", "crypto", "utf8proc", "pcre2-8", "vorbisfile", "vorbisenc", "vorbis", "ogg", "opusfile", "opusenc", "opus", "tinyexpr", "tiny-aes-c", "ffi"]
 if env["NVGT_TARGET"] == "windows":
+	# Poco's NetSSL is built against SChannel here rather than OpenSSL (see POCO_ENABLE_NETSSL_WIN in
+	# vcpkg/triplets), so neither OpenSSL nor the Poco Crypto module wrapping it needs to be linked.
+	# Windows already ships a TLS stack, and OpenSSL was worth roughly 4.9mb in every binary we produce,
+	# the stub embedded into each compiled game included.
+	common_libs = [l for l in common_libs if l not in ["PocoCrypto", "ssl", "crypto"]]
 	deb_rel_flags = ["/MTd", "/Od", "/Z7"] if ARGUMENTS.get("debug", "0") == "1" else ["/MT", "/O2"]
 	env.Append(CCFLAGS = ["/EHsc", "/J", "/utf-8", "/Gy", "/std:c++20", "/GF", "/Zc:inline", "/bigobj", "/permissive-", "/W3" if ARGUMENTS.get("warnings", "0") == "1" else "", "/WX" if ARGUMENTS.get("warnings_as_errors", "0") == "1" else ""] + deb_rel_flags)
 	env.Append(LINKFLAGS = ["/NOEXP", "/NOIMPLIB"], no_import_lib = 1)

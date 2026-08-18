@@ -99,6 +99,7 @@ def windows_lib_rename(out_dir):
 		("pocoMongoDBmt", "pocoMongoDB"),
 		("pocoNetmt", "pocoNet"),
 		("pocoNetSSLmt", "pocoNetSSL"),
+		("pocoNetSSLWinmt", "pocoNetSSL"), # The SChannel backed NetSSL_Win module, see POCO_ENABLE_NETSSL_WIN in the windows triplets.
 		("pocoPrometheusmt", "pocoPrometheus"),
 		("pocoRedismt", "pocoRedis"),
 		("pocoSevenZipmt", "pocoSevenZip"),
