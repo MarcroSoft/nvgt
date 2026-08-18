@@ -117,7 +117,26 @@
         "jwt",
         "prometheus",
         "sevenzip"
-      ]
+      ],
+      "platform": "!windows"
+    },
+    {
+      "name": "poco",
+      "default-features": false,
+      "$comment": "jwt is dropped here because it needs Poco Crypto, which needs OpenSSL. Nothing in NVGT uses either, and NetSSL is backed by SChannel on windows, so leaving them out keeps OpenSSL out of the dependency graph entirely.",
+      "features": [
+        "net",
+        "netssl",
+        "json",
+        "util",
+        "xml",
+        "encodings",
+        "mongodb",
+        "redis",
+        "prometheus",
+        "sevenzip"
+      ],
+      "platform": "windows"
     },
     {
       "name": "libgit2",

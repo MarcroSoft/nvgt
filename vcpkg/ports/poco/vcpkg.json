@@ -128,13 +128,24 @@
       ],
       "dependencies": [
         {
+          "$comment": "NVGT: the NetSSL_Win module talks to SChannel and does not use Poco Crypto, so the OpenSSL backed crypto feature is only required where NetSSL_OpenSSL is built.",
           "name": "poco",
           "default-features": false,
           "features": [
             "crypto",
             "net",
             "util"
-          ]
+          ],
+          "platform": "!windows"
+        },
+        {
+          "name": "poco",
+          "default-features": false,
+          "features": [
+            "net",
+            "util"
+          ],
+          "platform": "windows"
         }
       ]
     },
