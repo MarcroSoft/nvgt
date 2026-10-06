@@ -731,7 +731,7 @@ void CScriptArray::RemoveRange(asUINT start, asUINT count)
 	}
 
 	// Cap count to the end of the array
-	if (start + count > buffer->numElements)
+	if (count > buffer->numElements - start)
 		count = buffer->numElements - start;
 
 	// Destroy the elements that are being removed
@@ -825,6 +825,8 @@ bool CScriptArray::CheckMaxSize(asUINT numElements)
 	asUINT maxSize = 0xFFFFFFFFul - sizeof(SArrayBuffer) + 1;
 	if( elementSize > 0 )
 		maxSize /= elementSize;
+	if( maxSize > 0x7FFFFFFFul )
+		maxSize = 0x7FFFFFFFul;
 
 	if( numElements > maxSize )
 	{
@@ -1529,7 +1531,7 @@ void CScriptArray::Sort(asUINT startAt, asUINT count, bool asc)
 	int end = startAt + count;
 
 	// Check if we could access invalid item while sorting
-	if( start >= (int)buffer->numElements || end > (int)buffer->numElements )
+	if( startAt >= buffer->numElements || count > buffer->numElements - startAt )
 	{
 		asIScriptContext *ctx = asGetActiveContext();
 

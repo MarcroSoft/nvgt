@@ -126,12 +126,12 @@ bool InputEvent(SDL_Event* evt) {
 		g_MouseAbsY = evt->motion.y;
 		g_MouseIsVirtual = evt->motion.which == SDL_TOUCH_MOUSEID;
 		g_MouseLastDevice = evt->motion.which;
-	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_DOWN && evt->button.button < 32) {
 		g_MouseButtonsPressed[evt->button.button] = 1;
 		g_MouseButtonsReleased[evt->button.button] = 0;
 		g_MouseIsVirtual = evt->button.which == SDL_TOUCH_MOUSEID;
 		g_MouseLastDevice = evt->button.which;
-	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_UP) {
+	} else if (evt->type == SDL_EVENT_MOUSE_BUTTON_UP && evt->button.button < 32) {
 		g_MouseButtonsPressed[evt->button.button] = 0;
 		g_MouseButtonsReleased[evt->button.button] = 1;
 		g_MouseIsVirtual = evt->button.which == SDL_TOUCH_MOUSEID;
@@ -346,7 +346,7 @@ bool MousePressed(unsigned char button) {
 	return r;
 }
 bool mouse_down(unsigned char button) {
-	if (button > 31)
+	if (button == 0 || button > 31)
 		return false;
 	if (!g_KeysDown)
 		return false;
