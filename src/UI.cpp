@@ -373,6 +373,22 @@ static std::vector<SDL_Event> post_events; // holds events that should be proces
 bool set_application_name(const std::string& name) {
 	return SDL_SetHintWithPriority(SDL_HINT_APP_NAME, name.c_str(), SDL_HINT_OVERRIDE);
 }
+#ifdef _WIN32
+// Declared in SDL_main.h, which can't be included outside nvgt.cpp without its main() rewriting.
+extern "C" SDL_DECLSPEC bool SDLCALL SDL_RegisterApp(const char* name, Uint32 style, void* hInst);
+#endif
+// SDL registers its Windows window class, "SDL_app", when the video subsystem starts, and later registrations
+// are ignored. NVGT starts video only on the first window or input call, so claiming the class before that
+// gives every window of the game a class name of its own, which screen reader app modules and scripts can
+// recognise it by.
+bool set_window_class(const std::string& name) {
+	#ifdef _WIN32
+	if (name.empty() || (SDL_WasInit(0) & SDL_INIT_VIDEO)) return false;
+	return SDL_RegisterApp(name.c_str(), CS_BYTEALIGNCLIENT | CS_OWNDC, nullptr); // the style SDL itself uses
+	#else
+	return false;
+	#endif
+}
 game_window* ShowNVGTWindow(const std::string& window_title, unsigned int flags) {
 	if (g_window) {
 		g_window->set_title(window_title);
@@ -711,6 +727,7 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterGlobalFunction(_O("bool info_box(const string& in title, const string& in caption, const string& in text, uint64 flags = 0)"), asFUNCTION(info_box), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("void next_keyboard_layout()"), asFUNCTION(next_keyboard_layout), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool set_application_name(const string& in name)", asFUNCTION(set_application_name), asCALL_CDECL);
+	engine->RegisterGlobalFunction("bool set_window_class(const string&in name)", asFUNCTION(set_window_class), asCALL_CDECL);
 	engine->RegisterEnum("window_flash_operation");
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_CANCEL", SDL_FLASH_CANCEL);
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_BRIEFLY", SDL_FLASH_BRIEFLY);
