@@ -51,6 +51,12 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
+        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        echo lua >> user/static_plugins
     - id: cache_macos
       uses: actions/cache@v4
       with:
@@ -104,6 +110,12 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
+        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        echo lua >> user/static_plugins
     - uses: actions/cache@v4
       with:
         path: lindev
@@ -148,6 +160,12 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
+        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        echo lua >> user/static_plugins
     - uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
@@ -219,6 +237,12 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
+        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        echo lua >> user/static_plugins
     - uses: jwlawson/actions-setup-cmake@v2
       with:
         cmake-version: '4.0.1'

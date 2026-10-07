@@ -21,6 +21,7 @@ else
 fi
 scons -s
 echo Building NVGT IOS stubs...
-scons -s no_plugins=1 target=ios
+# Only plugins that support ios are built for it; today that is the lua plugin, linked statically when CI adds it.
+scons -s plugins=lua target=ios
 echo NVGT built.
 deactivate
