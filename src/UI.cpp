@@ -459,10 +459,19 @@ void* get_window_os_handle() {
 	return g_window ? reinterpret_cast<void*>(g_window->get_native_window()) : nullptr;
 }
 game_window* get_window() { return g_window.get(); }
+void Exit(int retcode); // nvgt_angelscript.cpp
+// Set when the user asks to close the game, with alt+f4, the window's close button, the taskbar, cmd+q and so on. SDL only reports
+// such a request, nothing closes by itself, so the script decides: it reads window_close_requested, or sets exit_on_window_close.
+bool g_window_close_requested = false;
+bool g_exit_on_window_close = false;
 void handle_sdl_event(SDL_Event* evt) {
 	if (InputEvent(evt)) return;
 	else if (evt->type == SDL_EVENT_WINDOW_FOCUS_LOST) lost_window_focus();
 	else if (evt->type == SDL_EVENT_WINDOW_FOCUS_GAINED) regained_window_focus();
+	else if (evt->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || evt->type == SDL_EVENT_QUIT) {
+		g_window_close_requested = true;
+		if (g_exit_on_window_close) Exit(0);
+	}
 }
 void refresh_window() {
 	anticheat_check();
@@ -728,6 +737,8 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterGlobalFunction(_O("void next_keyboard_layout()"), asFUNCTION(next_keyboard_layout), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool set_application_name(const string& in name)", asFUNCTION(set_application_name), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool set_window_class(const string&in name)", asFUNCTION(set_window_class), asCALL_CDECL);
+	engine->RegisterGlobalProperty("bool window_close_requested", &g_window_close_requested);
+	engine->RegisterGlobalProperty("bool exit_on_window_close", &g_exit_on_window_close);
 	engine->RegisterEnum("window_flash_operation");
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_CANCEL", SDL_FLASH_CANCEL);
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_BRIEFLY", SDL_FLASH_BRIEFLY);

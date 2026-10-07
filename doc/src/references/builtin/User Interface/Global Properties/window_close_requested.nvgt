@@ -1,0 +1,23 @@
+/**
+	Determines whether the user has asked to close your game, for example by pressing alt+f4 or clicking the window's close button.
+	bool window_close_requested;
+	## Remarks:
+		NVGT never closes your game by itself. When the user presses alt+f4, clicks the close button, closes the game from the taskbar or presses cmd+q on macOS, this property becomes true, and your game decides what happens, such as saving first or asking whether the user really wants to quit. It is updated whenever your game calls `wait()`.
+		The property stays true until you set it back to false, so set it to false if you decide not to close, or you will see the same request again.
+		Alt+f4 still arrives as ordinary key presses as well, so games that already check for it with `key_pressed(KEY_F4)` keep working.
+		To exit as soon as the user asks without checking this property, see `exit_on_window_close`.
+*/
+
+// Example:
+void main() {
+	show_window("Example");
+	wait(50); // Give screen readers time to speak the window title.
+	screen_reader_output("Press alt+f4 or close the window to be asked whether to exit.", true);
+	while (true) {
+		wait(5);
+		if (window_close_requested) {
+			window_close_requested = false;
+			if (question("Example", "Do you really want to exit?") == 1) exit();
+		}
+	}
+}
