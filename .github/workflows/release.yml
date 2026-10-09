@@ -220,6 +220,13 @@ jobs:
   windows_build:
     runs-on: windows-latest
     needs: generate_config
+    # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
+    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -250,9 +257,9 @@ jobs:
     - name: build dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       run: |
-        curl -d "Oh No! We have to build Windows dependencies. Please stand by." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Oh No! We have to build Windows dependencies. Please stand by." https://ntfy.sh/nvgt || true; fi
         python3 vcpkg/build_dependencies.py --archive
-        curl -d "Script finished." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Script finished." https://ntfy.sh/nvgt || true; fi
     - name: publish dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event.repository.fork == false }}
       run: |
@@ -260,11 +267,11 @@ jobs:
         curl -H "X-Auth: ${{secrets.CIPHP}}" -s "https://nvgt.dev/ci/devlibs_update.php"
     - name: build
       run: |
-        curl -d "Starting Windows build." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows build." https://ntfy.sh/nvgt || true; fi
         pip3 install scons
         choco install -y upx
         scons -s no_upx=0
-        curl -d "Windows build finished." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Windows build finished." https://ntfy.sh/nvgt || true; fi
     - uses: actions/upload-artifact@v7
       with:
         name: windows_release
@@ -287,6 +294,13 @@ jobs:
   windows_package:
     runs-on: windows-2022
     needs: ["android_build", "linux_build", "mac_build", "windows_build"]
+    # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
+    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/download-artifact@v8
@@ -295,7 +309,7 @@ jobs:
         python3 build/ci_set_version.py
     - name: package
       run: |
-        curl -d "Starting Windows package." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows package." https://ntfy.sh/nvgt || true; fi
         rm -r release
         mv windows_release release
         cd doc
@@ -314,7 +328,7 @@ jobs:
         cd install
         iscc nvgt.iss
         cd ..
-        curl -d "Windows package hopefully created!" https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Windows package hopefully created!" https://ntfy.sh/nvgt || true; fi
     - name: sign_windows
       if: github.event.repository.fork == false
       uses: Azure/artifact-signing-action@v1

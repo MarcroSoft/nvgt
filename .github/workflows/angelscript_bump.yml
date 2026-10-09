@@ -38,11 +38,21 @@ jobs:
         number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
         if [ -n "$number" ]; then
           git switch -c "$BRANCH" --track "origin/$BRANCH"
+          # bring in main, so the build uses main's latest release.yml and fixes
+          git merge --no-edit origin/main
         else
           git switch -C "$BRANCH"
         fi
         proposed=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
-        if [ "$proposed" = "$latest" ]; then echo "The pull request already proposes AngelScript $latest, nothing to do."; exit 0; fi
+        if [ "$proposed" = "$latest" ]; then
+          echo "The pull request already proposes AngelScript $latest."
+          # still push a merge of main, and rebuild with it
+          if [ -n "$number" ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$BRANCH")" ]; then
+            git push origin "$BRANCH"
+            gh workflow run release.yml --ref "$BRANCH"
+          fi
+          exit 0
+        fi
         sha512=$(curl -sSfL "https://github.com/anjo76/angelscript/archive/$latest.tar.gz" | sha512sum | cut -d' ' -f1)
         for p in $PORTS; do
           sed -i -E "s/(REF )[0-9a-f]{40}/\1$latest/; s/(SHA512 )[0-9a-f]{128}/\1$sha512/" "$p"
