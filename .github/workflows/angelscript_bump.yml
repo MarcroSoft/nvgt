@@ -24,41 +24,41 @@ jobs:
       PORTS: vcpkg/ports/angelscript/portfile.cmake vcpkg/ports/angelscript-nc/portfile.cmake
     steps:
     - uses: actions/checkout@v5
-    - name: find the newest AngelScript commit
-      id: check
+      with:
+        fetch-depth: 0
+    - name: update the ports on the angelscript-bump branch
       run: |
-        current=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
         latest=$(gh api repos/anjo76/angelscript/commits/master --jq .sha)
-        echo "current=$current" >> "$GITHUB_OUTPUT"
-        echo "latest=$latest" >> "$GITHUB_OUTPUT"
-        if [ "$current" = "$latest" ]; then echo "AngelScript master is still at $current, nothing to do."; fi
-    - name: point the ports at it and open a pull request
-      if: steps.check.outputs.current != steps.check.outputs.latest
-      env:
-        CURRENT: ${{ steps.check.outputs.current }}
-        LATEST: ${{ steps.check.outputs.latest }}
-      run: |
-        sha512=$(curl -sSfL "https://github.com/anjo76/angelscript/archive/$LATEST.tar.gz" | sha512sum | cut -d' ' -f1)
-        for p in $PORTS; do
-          sed -i -E "s/(REF )[0-9a-f]{40}/\1$LATEST/; s/(SHA512 )[0-9a-f]{128}/\1$sha512/" "$p"
-        done
-        git diff --stat
+        on_main=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
+        if [ "$on_main" = "$latest" ]; then echo "main already uses AngelScript $latest, nothing to do."; exit 0; fi
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git switch -C "$BRANCH"
-        git commit -q -am "Update AngelScript to ${LATEST:0:10}" -m "anjo76/angelscript master, $(gh api repos/anjo76/angelscript/commits/$LATEST --jq .commit.committer.date)."
-        git push -f origin "$BRANCH"
+        # An open pull request keeps its branch, so fixes made there (for example to the ports' patches) survive the
+        # next update; otherwise the branch starts over from main.
+        number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+        if [ -n "$number" ]; then
+          git switch -c "$BRANCH" --track "origin/$BRANCH"
+        else
+          git switch -C "$BRANCH"
+        fi
+        proposed=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
+        if [ "$proposed" = "$latest" ]; then echo "The pull request already proposes AngelScript $latest, nothing to do."; exit 0; fi
+        sha512=$(curl -sSfL "https://github.com/anjo76/angelscript/archive/$latest.tar.gz" | sha512sum | cut -d' ' -f1)
+        for p in $PORTS; do
+          sed -i -E "s/(REF )[0-9a-f]{40}/\1$latest/; s/(SHA512 )[0-9a-f]{128}/\1$sha512/" "$p"
+        done
+        git commit -q -am "Update AngelScript to ${latest:0:10}" -m "anjo76/angelscript master, $(gh api repos/anjo76/angelscript/commits/$latest --jq .commit.committer.date)."
+        if [ -n "$number" ]; then git push origin "$BRANCH"; else git push -f origin "$BRANCH"; fi
         {
-          echo "Points the angelscript and angelscript-nc ports at anjo76/angelscript master, \`${LATEST:0:10}\` (was \`${CURRENT:0:10}\`)."
+          echo "Points the angelscript and angelscript-nc ports at anjo76/angelscript master, \`${latest:0:10}\` (main has \`${on_main:0:10}\`)."
           echo
           echo "New commits:"
           echo
-          gh api "repos/anjo76/angelscript/compare/$CURRENT...$LATEST" --jq '.commits[] | "- [`\(.sha[0:7])`](\(.html_url)) \(.commit.message | split("\n")[0])"'
+          gh api "repos/anjo76/angelscript/compare/$on_main...$latest" --jq '.commits[] | "- [`\(.sha[0:7])`](\(.html_url)) \(.commit.message | split("\n")[0])"'
           echo
-          echo "The release build runs on this branch and shows as checks here. If a port's patch no longer applies, that is where it fails."
+          echo "The release build runs on this branch and shows as checks here. If a port's patch no longer applies, that is where it fails; fix it on this branch, the next update builds on top of it."
         } > body.md
-        title="Update AngelScript to ${LATEST:0:10}"
-        number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+        title="Update AngelScript to ${latest:0:10}"
         if [ -n "$number" ]; then
           gh pr edit "$number" --title "$title" --body-file body.md
         else
