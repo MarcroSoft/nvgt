@@ -54,8 +54,7 @@ jobs:
     - name: add the lua plugin, linked statically
       shell: bash
       run: |
-        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
-        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - id: cache_macos
       uses: actions/cache@v4
@@ -113,8 +112,7 @@ jobs:
     - name: add the lua plugin, linked statically
       shell: bash
       run: |
-        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
-        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: actions/cache@v4
       with:
@@ -163,8 +161,7 @@ jobs:
     - name: add the lua plugin, linked statically
       shell: bash
       run: |
-        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
-        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: actions/setup-java@v4
       with:
@@ -240,8 +237,7 @@ jobs:
     - name: add the lua plugin, linked statically
       shell: bash
       run: |
-        # The plugin lives in its own repository; built into nvgt and its stubs, no lua shared library ships.
-        git clone --depth 1 https://github.com/MarcroSoft/nvgt_lua plugin/lua
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: jwlawson/actions-setup-cmake@v2
       with:
