@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <iosfwd>
 #include <string>
 #include <vector>
 #include <angelscript.h>
@@ -32,7 +33,7 @@ void ConfigureEngineOptions(asIScriptEngine* engine);
 int ExecuteScript(asIScriptEngine* engine, const std::string& scriptFile);
 #ifndef NVGT_STUB
 	int               CompileScript(asIScriptEngine* engine, const std::string& scriptFile);
-	int SaveCompiledScript(asIScriptEngine* engine, unsigned char** output);
+	int SaveCompiledScript(asIScriptEngine* engine, unsigned char** output, std::ostream* bytecode_dump = nullptr);
 	int CompileExecutable(asIScriptEngine* engine, const std::string& scriptFile);
 	void              InitializeDebugger(asIScriptEngine* engine);
 #else

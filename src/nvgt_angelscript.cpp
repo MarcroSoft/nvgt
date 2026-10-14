@@ -141,6 +141,7 @@ class NVGTBytecodeStream : public asIBinaryStream {
 	const int buffer_size = 32 * 1024;
 
 public:
+	std::ostream* raw_copy = nullptr; // When set, everything written is also copied here as is, before compression and encryption.
 	NVGTBytecodeStream() {
 		content = NULL;
 		memset(&zstr, 0, sizeof(z_stream));
@@ -177,6 +178,7 @@ public:
 			zstr.next_out = (Bytef*)(content + zstr.total_out);
 			zstr.avail_out = alloc_size - zstr.total_out;
 		}
+		if (raw_copy) raw_copy->write((const char*)ptr, size);
 		zstr.next_in = (Bytef*)ptr;
 		zstr.avail_in = size;
 		while (zstr.avail_in > 0)
@@ -675,7 +677,7 @@ int CompileScript(asIScriptEngine *engine, const string &scriptFile) {
 	}
 	return 0;
 }
-int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output) {
+int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output, std::ostream* bytecode_dump) {
 	asIScriptModule *mod = engine->GetModule("nvgt_game", asGM_ONLY_IF_EXISTS);
 	if (mod == 0)
 		return -1;
@@ -689,8 +691,10 @@ int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output) {
 		bw.write7BitEncoded(UInt64(engine->GetEngineProperty(asEEngineProp(i))));
 	bw << Timestamp().raw();
 	bw << Application::instance().config().has("app.no_auto_chdir");
+	codestream.raw_copy = bytecode_dump; // Only the Angelscript bytecode, not NVGT's own data above, so the dump can be fed straight to LoadByteCode.
 	if (mod->SaveByteCode(&codestream, !g_debug) < 0)
 		return -1;
+	codestream.raw_copy = nullptr;
 	return codestream.get(output);
 }
 #ifndef NVGT_MOBILE
@@ -709,7 +713,16 @@ public:
 			if (CompileScript(g_ScriptEngine, script_file.c_str()) < 0) { fail = true; return; }
 			output->prepare();
 			unsigned char* code = NULL;
-			UInt32 code_size = SaveCompiledScript(engine, &code);
+			UInt32 code_size;
+			LayeredConfiguration& config = Util::Application::instance().config();
+			if (config.has("build.bytecode_dump")) {
+				string dump_path = config.getString("build.bytecode_dump", "");
+				if (dump_path.empty()) dump_path = Path(script_file).setExtension("bytecode").makeAbsolute().toString();
+				FileOutputStream dump(dump_path);
+				code_size = SaveCompiledScript(engine, &code, &dump);
+				dump.close();
+				if (code_size > 0 && !dump.good()) throw Exception(format("could not write the bytecode dump to %s", dump_path));
+			} else code_size = SaveCompiledScript(engine, &code);
 			if (code_size < 1) {
 				engine->WriteMessage(script_file.c_str(), 0, 0, asMSGTYPE_ERROR, format("failed to retrieve bytecode while trying to compile %s", output->get_output_file()).c_str());
 				fail = true;
