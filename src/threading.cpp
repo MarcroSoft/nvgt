@@ -62,6 +62,10 @@ public:
 		else return value;
 	}
 	std::string get_exception() { return progress.tryWait(0) ? exception : ""; }
+	void wait() {
+		if (!ctx) throw NullValueException("Object not initialized");
+		progress.wait();
+	}
 	bool call(asIScriptGeneric* gen, ThreadPool* pool = nullptr) {
 		asIScriptContext* aCtx = asGetActiveContext();
 		asIScriptEngine* engine = aCtx->GetEngine();
@@ -289,6 +293,8 @@ template<typename T> bool is_always_lock_free(T* obj) {
 }
 template<typename T> void atomic_notify_one(T* obj) { obj->notify_one(); }
 template<typename T> void atomic_notify_all(T* obj) { obj->notify_all(); }
+template<typename atomic_type, typename T> T atomic_post_inc(atomic_type* obj) { return (*obj)++; }
+template<typename atomic_type, typename T> T atomic_post_dec(atomic_type* obj) { return (*obj)--; }
 template<typename T>
 consteval const char* as_script_int_name() {
 	static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
@@ -349,9 +355,9 @@ if constexpr((std::is_integral_v<divisible_type>
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opSubAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator-=, (divisible_type) noexcept, divisible_type), asCALL_THISCALL);
 		if constexpr(std::is_integral_v<divisible_type>) {
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPreInc()", regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, () noexcept, divisible_type), asCALL_THISCALL);
-			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostInc(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, (int) noexcept, divisible_type), asCALL_THISCALL);
+			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostInc()", regular_type_name).c_str(), asFUNCTION((atomic_post_inc<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPreDec()", regular_type_name).c_str(), asMETHODPR(atomic_type, operator--, () noexcept, divisible_type), asCALL_THISCALL);
-			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostDec(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator--, (int) noexcept, divisible_type), asCALL_THISCALL);
+			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostDec()", regular_type_name).c_str(), asFUNCTION((atomic_post_dec<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_and(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_and, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_or(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_or, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_xor(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_xor, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
@@ -564,7 +570,7 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("async<T>", "bool get_complete() const property", asMETHOD(async_result, complete), asCALL_THISCALL);
 	engine->RegisterObjectMethod("async<T>", "bool get_failed() const property", asMETHOD(async_result, failed), asCALL_THISCALL);
 	engine->RegisterObjectMethod("async<T>", "string get_exception() const property", asMETHOD(async_result, get_exception), asCALL_THISCALL);
-	engine->RegisterObjectMethod("async<T>", "void wait()", asMETHOD(Event, wait), asCALL_THISCALL, 0, asOFFSET(async_result, progress), false);
+	engine->RegisterObjectMethod("async<T>", "void wait()", asMETHOD(async_result, wait), asCALL_THISCALL);
 	engine->RegisterObjectMethod("async<T>", "bool try_wait(uint ms)", asFUNCTION(async_try_wait), asCALL_CDECL_OBJFIRST);
 	RegisterAtomics(engine);
 }
