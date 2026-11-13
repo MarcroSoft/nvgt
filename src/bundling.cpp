@@ -345,9 +345,11 @@ protected:
 		// Copy any needed shared libraries to the output package, handling excludes and already existent files.
 		set_status("copying libraries...");
 		File libpathF(libpath);
-		// If recopying, start fresh. Otherwise the directory is created lazily below, only once a library
-		// actually needs copying, so an empty lib folder is never added to the bundle when everything is excluded.
-		if (libpathF.exists() && config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
+if (g_bundle_libraries.empty()) return; // No libraries need bundling.
+File libpathF(libpath);
+// If recopying, start fresh. Otherwise the directory is created lazily below, only once a library
+// actually needs copying, so an empty lib folder is never added to the bundle when everything is excluded.
+if (libpathF.exists() && config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
 		string source = get_nvgt_lib_directory(g_platform);
 		set<string> libs;
 		Glob::glob(Path(source).append("*").toString(), libs, Glob::GLOB_DOT_SPECIAL | Glob::GLOB_FOLLOW_SYMLINKS | Glob::GLOB_CASELESS);
