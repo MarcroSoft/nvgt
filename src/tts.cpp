@@ -88,11 +88,11 @@ void tts_audio_data::free() { if (engine) engine->free_pcm(this); }
 class fallback_voice_engine : public tts_engine_impl {
 	SharpVox::SharpVoxSpeaker speaker;
 	float rate, pitch, volume;
-	// Map our exposed rate (3 slow .. 10 .. 17 fast) to a SharpVox per-phoneme duration
-	// (larger = slower), so higher rate means faster speech as elsewhere in NVGT.
+	// Map our exposed rate (3 slow .. 10 .. 17 fast) to SharpVox's speaking rate, which works like words per minute
+	// (180 is its normal speed and larger is faster), so higher rate means faster speech as elsewhere in NVGT.
 	static int32_t rate_to_sharpvox(float r) {
 		if (r < 3) r = 3; else if (r > 17) r = 17;
-		return (int32_t)lround(300.0 + (r - 3.0) * (90.0 - 300.0) / (17.0 - 3.0));
+		return (int32_t)lround(90.0 + (r - 3.0) * (300.0 - 90.0) / (17.0 - 3.0));
 	}
 public:
 	fallback_voice_engine() : tts_engine_impl("fallback"), rate(10), pitch(264), volume(1.0f) {}
