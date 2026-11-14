@@ -1,7 +1,7 @@
 #ifndef SHARPVOX_KLATT_SYNTHESIZER_FP_H
 #define SHARPVOX_KLATT_SYNTHESIZER_FP_H
 
-// Fixed-point drop-in replacement for KlattSynthesizer.
+// Fixed-point Klatt (1980) formant synthesizer.
 // All per-sample IIR operations and modulation use integer arithmetic.
 // Coefficient computation (Calc_Pole_Coefficients) still uses float at frame
 // boundaries  that's negligible cost and keeps the math exact.
@@ -16,11 +16,8 @@
 //   Pink noise state:     int32_t Q15  (small values  50 max  1.6M, fits int32_t)
 //   Vibrato/tremolo phase: uint32_t [0, 1<<17) = [0, 2)
 //   Sin LUT:              int16_t Q15, 512 entries
-//
-// Enable by building with -DSHARPVOX_FIXED_POINT_SYNTH. TtsEngine.h/cpp use
-// #ifdef guards to swap KlattSynthesizerFP into the _synth member.
 
-#include "KlattSynthesizer.h"  // for Frame, HzToPitch/PitchToHz shared static helpers
+#include "Frame.h"  // Frame + pitch helpers
 
 #include <cstdint>
 #include <cmath>
@@ -31,19 +28,17 @@ namespace SharpVox {
 
     class KlattSynthesizerFP {
     public:
-        static constexpr int32_t KMaxBandWidth       = KlattSynthesizer::KMaxBandWidth;
-        static constexpr int32_t KPrecision          = KlattSynthesizer::KPrecision;
-        static constexpr int32_t KOnePtOh            = KlattSynthesizer::KOnePtOh;
-        static constexpr int32_t KNoiseGain          = KlattSynthesizer::KNoiseGain;
-        static constexpr int32_t KDefaultSampleRate  = KlattSynthesizer::KDefaultSampleRate;
-        static constexpr int32_t KDefaultSampFrameLen= KlattSynthesizer::KDefaultSampFrameLen;
+        static constexpr int32_t KMaxBandWidth       = 1225;
+        static constexpr int32_t KPrecision          = 13;
+        static constexpr int32_t KOnePtOh            = 0x2000;
+        static constexpr int32_t KNoiseGain          = 2500;
+        // parallel frication/burst bank gain
+        static constexpr float   KFricationGain      = 2.8f;
+        static constexpr int32_t KDefaultSampleRate  = 22050;
+        static constexpr int32_t KDefaultSampFrameLen= 112;
 
         int32_t SampleRate() const { return _sampleRate; }
         int32_t SampFrameLen;
-
-        // Delegate static helpers to the float version  identical math, no duplication.
-        static int16_t HzToPitch(int16_t hz)    { return KlattSynthesizer::HzToPitch(hz); }
-        static int16_t PitchToHz(int16_t pitch) { return KlattSynthesizer::PitchToHz(pitch); }
 
         int16_t VoiceChorus    = 0;
         int16_t Jitter         = 0;
@@ -99,7 +94,16 @@ namespace SharpVox {
         void Calc_Zero_Coefficients(float& Acoeff, float& Bcoeff, float& Ccoeff,
                                     int16_t pitch, int16_t bandWidth);
 
-        static std::vector<int32_t> SupportedSampleRates();
+        void Calc_Matched_Pole_Coefficients(float& b0, float& b1,
+                                            float& Bcoeff, float& Ccoeff,
+                                            int16_t pitch, int16_t bandWidth,
+                                            int32_t voiceMinBW = 50);
+
+        // Continuous accepted range; all rate compensation is analytic.
+        // Capped at 48k: frame-boundary interpolation residuals grow with
+        // SampFrameLen and become audible clicks above this.
+        static const int32_t KMinSampleRate = 8000;
+        static const int32_t KMaxSampleRate = 48000;
 
     private:
         int32_t _sampleRate;
@@ -118,8 +122,17 @@ namespace SharpVox {
         float _f1r, _f1cosw;
         float _f2r, _f2cosw;
         float _f3r, _f3cosw;
-        int32_t _f4A,  _f4B,  _f4C;
-        int32_t _f5cA, _f5cB, _f5cC;
+        // Cascade matched one-zero numerators (Vicanek 2016), interpolated per-sample
+        // for F1-F3; poles stay the classic Klatt impulse-invariant pair.
+        float _f1b0, _f1b1, _f2b0, _f2b1, _f3b0, _f3b1;
+        // Cascade F4/F5: float matched coefficients, fixed at SetVoice.
+        float _f4b0,  _f4b1,  _f4B,  _f4C;
+        float _f5cb0, _f5cb1, _f5cB, _f5cC;
+        float _f6cb0, _f6cb1, _f6cB, _f6cC;
+        // Cascade F7/F8: fills the >F6 envelope gap the original 10kHz Klatt
+        // design got free from near-Nyquist phantom poles (Rabiner 1968 values).
+        float _f7cb0, _f7cb1, _f7cB, _f7cC;
+        float _f8cb0, _f8cb1, _f8cB, _f8cC;
         int32_t _f4pA, _f4pB, _f4pC;
         int32_t _f5pA, _f5pB, _f5pC;
         int32_t _f6pA, _f6pB, _f6pC;
@@ -133,6 +146,11 @@ namespace SharpVox {
         float   _f3D1,  _f3D2;
         float   _f4D1,  _f4D2;
         float   _f5cD1, _f5cD2;
+        float   _f6cD1, _f6cD2;
+        float   _f7cD1, _f7cD2;
+        float   _f8cD1, _f8cD2;
+        // Cascade input taps x[n-1] for the matched one-zero numerators.
+        float   _f1X1, _f2X1, _f3X1, _f4X1, _f5cX1, _f6cX1, _f7cX1, _f8cX1;
         float   _nzD1,  _nzD2;
         float   _npD1,  _npD2;
         float   _sgD1,  _sgD2;
@@ -144,7 +162,21 @@ namespace SharpVox {
         int32_t _f6pD1, _f6pD2;
         int32_t _preemphPrev;   // pre-emphasis one-sample delay, Q0
         int32_t _preemphA_q15;  // pre-emphasis zero, rate-compensated at construction
+        int32_t _preemphScale_q12;  // fs/22050 in Q12, flattens differentiator gain across rates
         float _tiltPrev;        // spectral tilt one-sample delay (float, matches float variant)
+
+        // breath (BreathAmt) shaping
+        static constexpr float kBreathTilt        = 0.95f;   // first difference pre emphasis
+        static constexpr float kBreathHighShift   = 5500.0f; // Hz added to each formant
+        static constexpr float kBreathHighBwMul   = 3.0f;    // bank bandwidth = formant BW x this
+        static constexpr float kBreathHighBwMin   = 600.0f;  // Hz
+        static constexpr float kBreathHighGain    = 0.0015f; // bank level re the cascade breath
+        static constexpr float kBreathHighDecay   = 0.9f;    // per resonator gain step (F1 copy strongest)
+        struct BreathBand { float b0, b2, a1, a2, z1, z2, gain; };
+        BreathBand _breathBank[5];
+        int32_t _breathBankN;
+        float _breathPrev;      // pre-emphasis delay
+        float _breathExc;       // this sample's gated breath excitation for the bank
 
         //  Amplitude state: Q8 (float * 256) 
         int32_t _voiceAmp_q8;
@@ -161,11 +193,9 @@ namespace SharpVox {
         int32_t _chorusPhase;
         int32_t _chorusPhaseInc;
         // Inline polynomial parameters (replace lookup tables — eliminates staircase quantization).
-        int32_t _Ne_fp;          // open-phase end in 24-bit phase units
-        int32_t _chorusNe_fp;
-        float   _glotInvNe_f;   // 1.0f / _Ne_fp
-        float   _chorusInvNe_f;
-        float   _voiceGain_f;   // vGain * 288.0f (matches float synth _lfGain)
+    int32_t _Ne_fp;          // open-phase end in 24-bit phase units
+    int32_t _chorusNe_fp;
+    float   _voiceGain_f;   // vGain * 288.0f (matches float synth _lfGain)
 
 #ifdef SHARPVOX_SAMPLED_GLOT
         std::vector<float> _sgBuf;     // resampled glottal source, normalised to max|x|=1
@@ -202,6 +232,8 @@ namespace SharpVox {
         // Rate-adapted poles (Q15) and gains (Q15); _pnP5mq15 is positive magnitude.
         int32_t _pnP0q15,_pnP1q15,_pnP2q15,_pnP3q15,_pnP4q15,_pnP5mq15;
         int32_t _pnG0q15,_pnG1q15,_pnG2q15,_pnG3q15,_pnG4q15,_pnG5q15;
+        // White-tail gains (Q15), scaled sqrt(fs/22050) to keep tail PSD rate-invariant.
+        int32_t _pnW0q15,_pnW1q15;
 
         //  Noise PRNG 
         int32_t _noiseSeed;
@@ -218,6 +250,9 @@ namespace SharpVox {
         int16_t _nasalPoleBW;
         int16_t _f4cFreq, _f4cBW;
         int16_t _f5cFreq, _f5cBW;
+        int16_t _f6cFreq, _f6cBW;   // fixed cascade F6 (Klatt 1980 higher-pole correction)
+        int16_t _f7cFreq, _f7cBW;   // fixed cascade F7 (Rabiner 1968, 6500Hz/BW720)
+        int16_t _f8cFreq, _f8cBW;   // fixed cascade F8 (Rabiner 1968, 7500Hz/BW1250)
         int16_t _f4pFreq, _f4pBW;
         int16_t _f5pFreq, _f5pBW;
         int16_t _f6pFreq, _f6pBW;

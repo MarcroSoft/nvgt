@@ -8,10 +8,7 @@
 #include <unordered_map>
 #include "../include/AudioProcessor.h"
 #include "../include/SpeechRenderer.h"
-#include "../include/KlattSynthesizer.h"
-#ifdef SHARPVOX_FIXED_POINT_SYNTH
 #include "../include/KlattSynthesizerFP.h"
-#endif
 #include "../include/TextCommands.h"
 #include "../include/KlattschParser.h"
 #include "../include/Phonemizer.h"
@@ -28,9 +25,19 @@ namespace SharpVox {
             : Phoneme(phoneme), TimeSeconds(timeSeconds), IsWordStart(isWordStart) {}
     };
 
+    // stores formant event data
+    struct FormantEvent {
+        float TimeSeconds;
+        float F1;
+        float F2;
+        float F3;
+        FormantEvent(float timeSeconds, float f1, float f2, float f3)
+            : TimeSeconds(timeSeconds), F1(f1), F2(f2), F3(f3) {}
+    };
+
     // Top-level TTS API. Converts text to audio via the full pipeline:
     //   Phonemizer (text -> PhonemeToken[]) -> AudioProcessor (phoneme processing) ->
-    //   SpeechRenderer (formant targets) -> KlattSynthesizer (PCM samples).
+    //   SpeechRenderer (formant targets) -> KlattSynthesizerFP (PCM samples).
     //
     // Both speak paths stream clause by clause, so memory is bounded by the longest
     // clause rather than the whole input. Each sentence or clause gets its own
@@ -39,7 +46,6 @@ namespace SharpVox {
     class TtsEngine {
     public:
         static const int32_t DefaultSampleRate = 22050;
-        static const std::vector<int32_t>& SupportedSampleRates();
         int32_t SampleRate;
 
         TtsEngine(const uint8_t* dictData, size_t dictSize,
@@ -73,22 +79,21 @@ namespace SharpVox {
             std::string Phoneme;
             int32_t FrameInPhon;
             int32_t F0;
-            int32_t TiltExcursion;
-            int32_t TiltSmooth;
-            int32_t TiltHeld;
-            int32_t TiltPhase;
+            int32_t FujiExcursion;  // smoothed phrase+accent+clause excursion
+            int32_t PhraseResp;     // Fujisaki phrase filter response
+            int32_t AccentResp;     // Fujisaki accent filter response
             int32_t BaselineOffset;
             int32_t TotalOffset;
             PitchFrameRecord(const std::string& phoneme, int32_t frameInPhon, int32_t f0,
-                int32_t tiltExcursion, int32_t tiltSmooth, int32_t tiltHeld, int32_t tiltPhase,
+                int32_t fujiExcursion, int32_t phraseResp, int32_t accentResp,
                 int32_t baselineOffset, int32_t totalOffset)
                 : Phoneme(phoneme), FrameInPhon(frameInPhon), F0(f0),
-                  TiltExcursion(tiltExcursion), TiltSmooth(tiltSmooth),
-                  TiltHeld(tiltHeld), TiltPhase(tiltPhase),
+                  FujiExcursion(fujiExcursion), PhraseResp(phraseResp),
+                  AccentResp(accentResp),
                   BaselineOffset(baselineOffset), TotalOffset(totalOffset) {}
         };
 
-        // Returns one record per synthesis frame (5 ms each) with pitch and tilt diagnostics.
+        // Returns one record per synthesis frame (5 ms each) with pitch and Fujisaki diagnostics.
         std::vector<PitchFrameRecord> DumpPitchFrames(const std::string& text);
 
 #ifdef SHARPVOX_SAMPLED_GLOT
@@ -102,12 +107,13 @@ namespace SharpVox {
                    void* userdata = nullptr);
 
         // Streams audio chunks together with the phoneme events whose onsets fall
-        // inside each chunk (often 0 or 1). TimeSeconds stays absolute from the start
-        // of the utterance, so consumers can rebuild the full timeline by appending.
+        // inside each chunk (often 0 or 1), and the 60hz formant events
         void SpeakWithEvents(
             const std::string& text,
             void (*onChunk)(const int16_t* buf, int32_t len,
-                            const PhonemeEvent* events, int32_t count, void* userdata),
+                            const PhonemeEvent* events, int32_t count,
+                            const FormantEvent* formants, int32_t formantCount,
+                            void* userdata),
             void* userdata = nullptr);
 
     private:
@@ -116,11 +122,7 @@ namespace SharpVox {
         KlattschParser _klattsch;
         AudioProcessor _be;
         SpeechRenderer _renderer;
-#ifdef SHARPVOX_FIXED_POINT_SYNTH
         KlattSynthesizerFP _synth;
-#else
-        KlattSynthesizer _synth;
-#endif
 #ifdef SHARPVOX_SAMPLED_GLOT
         std::vector<float> _glotPcm;
         int32_t _glotSrcRate    = 0;
@@ -132,7 +134,8 @@ namespace SharpVox {
                                      std::function<void(const int16_t*, int32_t)> onBuffer);
 
         void ProcessSentenceStreamingFromPlan(const ClausePlan& plan,
-                                              std::function<void(const int16_t*, int32_t)> onBuffer);
+                                              std::function<void(const int16_t*, int32_t)> onBuffer,
+                                              std::function<void(int32_t, const Frame&)> onFrame = nullptr);
 
 
         void ApplyCommand(const EmbeddedCmd::VoiceCommand& cmd);

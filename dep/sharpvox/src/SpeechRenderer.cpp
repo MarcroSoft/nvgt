@@ -46,6 +46,8 @@ SpeechRenderer::SpeechRenderer(const VoiceData& voice)
 
 void SpeechRenderer::RenderStreaming(const ClausePlan& plan, std::function<void(const Frame&)> callback) {
     _plan = &plan;
+    _transRateScaleQ16 = RateLin::EventScaleQ16(_plan->Pitch.SpeechRate);
+    _bwWidenQ16 = RateLin::BwWidenQ16(_plan->Pitch.SpeechRate);
     _curPhonBufIndex = 0;
     _durDoneInPhon   = 0;
     _startingNewPhon = true;
@@ -190,6 +192,11 @@ int32_t SpeechRenderer::OvX(int32_t x) const {
 void SpeechRenderer::InsertBurst() {
     if ((_curPhonFlags & kPlosiveF) != 0) {
         int32_t burstDur = Tables::BurstDurationTable[_curPhon] / kFrameTime;
+        // Shrink the fixed burst toward the linear tempo at high rates.
+        if (_transRateScaleQ16 != 65536) {
+            burstDur = (int32_t)(((int64_t)burstDur * _transRateScaleQ16) >> 16);
+            if (burstDur < 1) burstDur = 1;
+        }
         if ((_curPhonFlags & kStopF) != 0 && (_curPhonFlags & kVoicedF) == 0) {
             if ((_nextPhonFlags & (kStopF | kNasalF)) != 0) {
                 burstDur = (_nextPhonCtrl & kPrimOrEmphStress) != 0 ? 0 : burstDur >> 1;
@@ -248,6 +255,12 @@ void SpeechRenderer::InsertBurst() {
             }
         } else if ((_curPhonCtrl & kVowelF) == 0) {
             rel += 20 / kFrameTime;
+        }
+        // Shrink the fixed aspiration/VOT window toward the linear tempo at high
+        // rates, unless a full plosive release already forced rel below.
+        if (_transRateScaleQ16 != 65536 && (_curPhonCtrl & kPlosive_Release) == 0) {
+            rel = (int32_t)(((int64_t)rel * _transRateScaleQ16) >> 16);
+            if (rel < 1) rel = 1;
         }
         if (rel >= _curPhonDur) {
             rel = _curPhonDur - 1;
@@ -349,7 +362,7 @@ void SpeechRenderer::InterpolateControls() {
 // parameters; scaling all three formants by a constant factor approximates the
 // effect of a shorter or longer vocal tract while preserving inter-formant
 // relationships. Minimum inter-formant separations (F2-F1 >= 200 Hz,
-// F3-F2 >= 600 Hz) prevent resonator crossing and the spectral artifacts that
+// F3-F2 >= 300 Hz) prevent resonator crossing and the spectral artifacts that
 // result from pole-zero near-cancellations.
 //
 // Bandwidths are gain-scaled per voice. Klatt & Klatt (1990) show that formant
@@ -370,17 +383,26 @@ Frame SpeechRenderer::SaveFrame(int16_t f0, uint8_t phonCtrl) {
     while (curF2 - curF1 < 200) {
         curF1 -= 10;
     }
-    while (curF3 - curF2 < 600) {
+    // rhotics bring F3 to within ~300 Hz of F2
+    while (curF3 - curF2 < kMinF3F2Separation) {
         curF3 += 10;
     }
 
-    f.F1  = KlattSynthesizer::HzToPitch(curF1);
-    f.F2  = KlattSynthesizer::HzToPitch(curF2);
-    f.F3  = KlattSynthesizer::HzToPitch(curF3);
+    f.F1  = HzToPitch(curF1);
+    f.F2  = HzToPitch(curF2);
+    f.F3  = HzToPitch(curF3);
     f.Bw1 = (int16_t)((_controlData[kBW1] * _voiceBWgain1) >> 16);
     f.Bw2 = (int16_t)((_controlData[kBW2] * _voiceBWgain2) >> 16);
     f.Bw3 = (int16_t)((_controlData[kBW3] * _voiceBWgain3) >> 16);
-    f.FNZ = KlattSynthesizer::HzToPitch((int16_t)(_controlData[kFNZ] * _tractScale));
+    // High-rate resonator settling (TGSpeechBox reference): widen the cascade
+    // bandwidths on voiced frames as rate climbs so formants reach identity in
+    // fewer frames. Identity at/below normal rate; leaves aspiration widening intact.
+    if (_bwWidenQ16 != 65536 && (_curPhonFlags & kVoicedF) != 0) {
+        f.Bw1 = (int16_t)(((int32_t)f.Bw1 * _bwWidenQ16) >> 16);
+        f.Bw2 = (int16_t)(((int32_t)f.Bw2 * _bwWidenQ16) >> 16);
+        f.Bw3 = (int16_t)(((int32_t)f.Bw3 * _bwWidenQ16) >> 16);
+    }
+    f.FNZ = HzToPitch((int16_t)(_controlData[kFNZ] * _tractScale));
     f.Av  = (int16_t)(LogToLin(_controlData[kAV]) * _tractScale);
     f.Af  = LogToLin(_controlData[kAF]);
     f.A2  = LogToLin(_controlData[kAp2]);
@@ -506,8 +528,16 @@ void SpeechRenderer::GetLocus(int32_t iCons, int32_t iVowel, int32_t bType) {
         } else if ((cf & kVelar) != 0) {
             slopeQ15  = 23266;
             intercept = 792 + _locusOffset;
+            if (vowRank != kFrontR) {
+                intercept -= 200;
+            }
             // Lehiste & Peterson (1961) Table III: velars ~7.8-8.8 cs
             _transTime = 80 / kFrameTime;
+        } else if ((cf & kDentalF) != 0) {
+            // Dentals: the alveolar equation gives a glide-like /j/ onset
+            slopeQ15  = 19661;
+            intercept = 700 + _locusOffset;
+            _transTime = 70 / kFrameTime;
         } else {
             slopeQ15  = 13763;
             intercept = 1211 + _locusOffset;
@@ -624,6 +654,15 @@ int16_t SpeechRenderer::GetTargetRaw(int32_t index) {
     } else if (bt == kSourceAmpType) {
         if (_curBlockIndex == kAV) {
             tv = Tables::GetAmplitudeVoicing(_male, cur);
+            // nasal murmur sits well below the vowels. the
+            // pause final nasals ("-ing.") hold their target level for their whole length, so they take a lighter cut, as does syllabic EN.
+            if ((ctrl & kJapaneseMora) == 0) {
+                if (cur >= _M_ && cur <= _NG_) {
+                    tv -= (next == _SIL_) ? kFinalNasalVoicingCut : kNasalVoicingCut;
+                } else if (cur == _EN_) {
+                    tv -= kSyllabicNasalVoicingCut;
+                }
+            }
             if ((ctrl & kPlosive_Release) != 0) {
                 tv -= (int16_t)(((pf & kNasalF) != 0) ? 6 : 20);
             }
@@ -655,6 +694,18 @@ int16_t SpeechRenderer::GetTargetRaw(int32_t index) {
             tv = _voiceNoiseAmplitudeTable[idx2];
             if ((PC(index + 1) & kPlosive_Release) != 0 && tv >= 4) {
                 tv -= 4;
+            }
+            // Voiced fricatives radiate weaker frication than their voiceless
+            // counterparts: glottal vibration lowers transglottal pressure and
+            // hence noise (Stevens 1998). The tables give V/DH/Z/ZH the same
+            // noise level as F/TH/S/SH, so the voicing bar is the only cue and
+            // it fades word-finally, making Z sound like S. Attenuate the noise
+            // so voicing stays dominant.
+            if ((cf & kFric) != 0 && (cf & kVoicedF) != 0 && tv > 0) {
+                tv -= 16;
+                if (tv < 0) {
+                    tv = 0;
+                }
             }
         }
     }
@@ -746,9 +797,9 @@ void SpeechRenderer::GetDiphthongs(int32_t index) {
     cb.curP_END_Targ    = p2;
 
     cb.ptrToTargetList = _nextDiphEntryIdx;
-    _diphEntries[_nextDiphEntryIdx++] = (int16_t)t2;
-    _diphEntries[_nextDiphEntryIdx++] = (int16_t)step;
-    _diphEntries[_nextDiphEntryIdx++] = (int16_t)_curPhonDur;
+    _diphEntries[_nextDiphEntryIdx++] = t2;
+    _diphEntries[_nextDiphEntryIdx++] = step;
+    _diphEntries[_nextDiphEntryIdx++] = _curPhonDur;
     _diphEntries[_nextDiphEntryIdx++] = 0;
 }
 
@@ -758,6 +809,28 @@ int32_t SpeechRenderer::ScalePrcnt(int32_t pct) {
     int64_t t = (pct * _curPhonPctOfMaxDur) >> 8;
     t = (_curPhonMaxDur * t / 100) >> 8;
     return t <= 0 ? 1 : (int32_t)t;
+}
+
+// High-rate intelligibility (Janse et al. 2003). See RateLin in SynthData.h.
+// Scales a fixed transition length toward the linear tempo. Full or zero-length
+// transitions pass through so held segments are not disturbed.
+int32_t SpeechRenderer::LinearizeTransTime(int32_t t) {
+    if (t <= 0 || t >= _curPhonDur) return t;
+    // At/below normal rate the scale is identity; leave the ramp untouched so the
+    // baseline output stays bit-identical to the unscaled path.
+    if (_transRateScaleQ16 >= 65536) return t;
+    int64_t s = ((int64_t)t * _transRateScaleQ16) >> 16;
+    // Cap each ramp at kMaxTransPct of the phoneme so a steady-state core always
+    // survives. Without this the floored head+tail ramps consume short high-rate
+    // phonemes whole, so formants never reach target (undershoot, "muddy" glides).
+    int32_t cap = (_curPhonDur * kMaxTransPct) / 100;
+    // Keep a minimum ramp so the delta is not stepped in a single frame (click),
+    // unless the cap is tighter (very short phoneme wins to preserve the core).
+    int32_t lo = t < kMinTransFrames ? t : kMinTransFrames;
+    if (lo > cap) lo = cap;
+    if (s < lo) s = lo;
+    if (s > cap) s = cap;
+    return (int32_t)s;
 }
 
 // Applies vowel-context coloring adjustments to diphthong endpoint formants.
@@ -896,6 +969,12 @@ void SpeechRenderer::InitCtrlsForNewPhon() {
                     if ((_curPhonCtrl & kStressField) != 0) {
                         u *= kStressedScale;
                     }
+                    // unstressed er stays r colored in American English, keep the
+                    // F2/F3 of rhotic vowels out of the undershoot pull
+                    if ((_curBlockIndex == kF2 || _curBlockIndex == kF3) &&
+                        (_curPhon == _ER_ || (_curPhon >= _IR_ && _curPhon <= _UR_))) {
+                        u = 0.0f;
+                    }
                     int32_t uq = (int32_t)(u * 65536.0f);
                     // Coarticulatory undershoot toward the adjacent-segment locus.
                     cb.curP_START_Targ += (int16_t)((locusMid - cb.curP_START_Targ) * uq >> 16);
@@ -925,6 +1004,7 @@ void SpeechRenderer::InitCtrlsForNewPhon() {
         _transLevel = (cb.prevP_END_Targ + cb.curP_START_Targ) >> 1;
         _transTime  = 32 / kFrameTime;
         HeadRules(cb, bt);
+        _transTime  = LinearizeTransTime(_transTime);
 
         // Onset hardness scales the AV ramp: 0 = soft (slow ramp from deep below),
         // 50 = neutral, 100 = hard (near-instant onset at target level)
@@ -940,26 +1020,74 @@ void SpeechRenderer::InitCtrlsForNewPhon() {
             }
         }
 
-        cb.HEAD_offs = 0; cb.HEAD_step = 0;
-        if (_transTime > 0) {
-            cb.HEAD_offs = (_transLevel - cb.curP_START_Targ) << kStepSizeRes;
-            if (cb.HEAD_offs != 0) {
-                int32_t hs   = (int32_t)(((int64_t)OvX(_transTime) * cb.HEAD_offs) >> 16);
-                cb.HEAD_step = hs;
-                cb.HEAD_offs = hs * _transTime;
-            }
-        }
+        // Capture the onset ramp. The offset ramp is computed next so the combined
+        // transition cap can be applied before either envelope is built.
+        int32_t headLevel = _transLevel;
+        int32_t headTime  = _transTime;
 
         // TAIL envelope: offset ramp from curP_END_Targ toward the following target
         _transLevel = (cb.curP_END_Targ + cb.nextP_START_Targ) >> 1;
         _transTime  = 25 / kFrameTime;
         TailRules(cb, bt);
+        _transTime  = LinearizeTransTime(_transTime);
+        int32_t tailLevel = _transLevel;
+        int32_t tailTime  = _transTime;
 
+        // Short-vowel coarticulatory undershoot: as a vowel shortens, scale the
+        // onset/offset excursion toward the vowel's own target so it keeps a steady
+        // nucleus instead of blurring (AH -> EH) or snapping through a halfway shape.
+        // Vowel frequency blocks only; consonant place transitions are untouched.
+        if (bt == kFreqType && (_curPhonFlags & kVowelF) != 0) {
+            // cap each formant ramp at kMaxTransPct of the vowel at every rate
+            int32_t cap = (_curPhonDur * kMaxTransPct) / 100;
+            if (cap < 1) cap = 1;
+            if (headTime > cap) headTime = cap;
+            if (tailTime > cap) tailTime = cap;
+
+            // Full excursion at/above kRefDurFrames; below it scale down, floored.
+            constexpr int32_t kRefDurFrames = 12;                // ~60ms at 5ms/frame
+            constexpr int32_t kMinScaleQ16  = (65536 * 30) / 100;
+            int32_t scaleQ16 = 65536;
+            if (_curPhonDur < kRefDurFrames) {
+                scaleQ16 = (_curPhonDur << 16) / kRefDurFrames;
+                if (scaleQ16 < kMinScaleQ16) {
+                    scaleQ16 = kMinScaleQ16;
+                }
+            }
+            headLevel = cb.curP_START_Targ +
+                (int32_t)(((int64_t)(headLevel - cb.curP_START_Targ) * scaleQ16) >> 16);
+            tailLevel = cb.curP_END_Targ +
+                (int32_t)(((int64_t)(tailLevel - cb.curP_END_Targ) * scaleQ16) >> 16);
+        }
+
+        if (bt == kFreqType && (_curPhonFlags & kSonorant1F) != 0 && (_prevPhonFlags & kSonorant1F) != 0 &&
+            ((_curPhonFlags | _prevPhonFlags) & kLiqGlideF) != 0 && _prevPhon != _SIL_) {
+            headLevel = cb.prevTailLevel;
+        }
+        cb.prevTailLevel = tailLevel;
+
+        cb.HEAD_offs = 0; cb.HEAD_step = 0;
+        if (headTime > 0) {
+            cb.HEAD_offs = (headLevel - cb.curP_START_Targ) << kStepSizeRes;
+            if (cb.HEAD_offs != 0) {
+                int32_t hs   = (int32_t)(((int64_t)OvX(headTime) * cb.HEAD_offs) / 65536);
+                cb.HEAD_step = hs;
+                cb.HEAD_offs = hs * headTime;
+            }
+        }
+
+        // Keep the TAIL start in sync with the (possibly capped) transition length,
+        // else the ramp accumulates for more frames than its step is sized for and
+        // overshoots badly at high rate, swamping the diphthong's own trajectory.
+        cb.TAIL_START_time = _curPhonDur - tailTime;
+        if (cb.TAIL_START_time < 0) {
+            cb.TAIL_START_time = 0;
+        }
         cb.TAIL_offs = 0; cb.TAIL_step = 0;
-        if (_transTime > 0) {
-            int32_t ts = (_transLevel - cb.curP_END_Targ) << kStepSizeRes;
+        if (tailTime > 0) {
+            int32_t ts = (tailLevel - cb.curP_END_Targ) << kStepSizeRes;
             if (ts != 0) {
-                cb.TAIL_step = (int32_t)(((int64_t)OvX(_transTime) * ts) >> 16);
+                cb.TAIL_step = (int32_t)(((int64_t)OvX(tailTime) * ts) >> 16);
             }
         }
     }
@@ -1221,9 +1349,7 @@ void SpeechRenderer::TailRules(ControlBlock& cb, int32_t bt) {
                     if (_curBlockIndex == kF3) {
                         _transTime = 60 / kFrameTime;
                     }
-                    if ((_nextPhon == _L_ || _nextPhon == _EL_ || _nextPhon == _LX_) && _curBlockIndex == kF1) {
-                        _transLevel += 80;
-                    }
+                    _transLevel = (cb.curP_END_Targ + _transLevel) >> 1;
                 } else if (_nextPhon == _HH_) {
                     _transLevel = (cb.curP_END_Targ + _transLevel) >> 1;
                 }
@@ -1359,6 +1485,9 @@ void SpeechRenderer::TailRules(ControlBlock& cb, int32_t bt) {
                     _transLevel = ampT + 3;
                     if (_nextPhon == _SIL_ || (_nextPhonCtrl & kPlosive_Release) != 0) {
                         _transTime = 75 / kFrameTime;
+                    }
+                    if (_nextPhon == _SIL_ && (_curPhon == _LX_ || _curPhon == _EL_)) {
+                        _transTime = _curPhonDur;
                     }
                 }
             }

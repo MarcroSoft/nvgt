@@ -5,6 +5,10 @@
 
 #include "../../include/TtsEngine.h"
 #include "../../include/LibraryData.h"
+#include "../../include/KlattschParser.h"
+#ifdef HAVE_MECAB
+#include "../../include/MeCabReader.h"
+#endif
 
 namespace SharpVox {
 
@@ -18,6 +22,9 @@ SharpVoxSpeaker::SharpVoxSpeaker()
     : _engine(BuildVoice(), LibraryData::dictionary,
               static_cast<size_t>(LibraryData::dictionarySize),
               MakeSymbolsLookup(), SampleRate) {
+#ifdef HAVE_MECAB
+    MeCabReader::Init();
+#endif
 }
 
 std::string SharpVoxSpeaker::PrepareText(const std::string& text) {
@@ -26,8 +33,9 @@ std::string SharpVoxSpeaker::PrepareText(const std::string& text) {
     }
     char buf[256];
     std::snprintf(buf, sizeof(buf),
-        "b%.0f r%.0f v%.1f w%.1f h%.2f t%.2f g%.2f",
-        (double)KlBaseF0, (double)KlRate, (double)KlVibrato, (double)KlVibRate,
+        "b%.0f r%.0f v%.2f w%.1f h%.2f t%.2f g%.2f",
+        (double)KlBaseF0, (double)KlRate,
+        (double)VibratoDepthToKlattschHz(), (double)GetVibratoRate() / 10.0,
         (double)KlAsp, (double)KlTilt, (double)KlEffort);
     KlattschMode = false;
     return std::string("[:klattsch on] ") + buf + " " + text + " [:klattsch off]";
@@ -37,21 +45,43 @@ struct SharpVoxSpeaker::SpeakCtx {
     SharpVoxSpeaker* speaker;
     void (*userOnBuffer)(SharpVoxSpeaker*, const int16_t*, int32_t, void*);
     void (*userOnChunk)(SharpVoxSpeaker*, const int16_t*, int32_t,
-                        const PhonemeEvent*, int32_t, void*);
+                        const PhonemeEvent*, int32_t,
+                        const FormantEvent*, int32_t, void*);
     void* userdata;
 };
 
+const int16_t* SharpVoxSpeaker::ScaleForVolume(const int16_t* buf, int32_t len) {
+    float vol = AudioVolume;
+    if (std::fabs(vol - 1.0f) < 0.001f || len <= 0) {
+        return buf;
+    }
+    std::vector<int16_t>& scratch = _scaleScratch;
+    scratch.resize(static_cast<size_t>(len));
+    for (int32_t i = 0; i < len; ++i) {
+        float v = buf[i] * vol;
+        if (v >  32767.0f) v =  32767.0f;
+        if (v < -32768.0f) v = -32768.0f;
+        scratch[i] = static_cast<int16_t>(v >= 0.0f ? v + 0.5f : v - 0.5f);
+    }
+    return scratch.data();
+}
+
 void SharpVoxSpeaker::SpeakBufAdapter(const int16_t* buf, int32_t len, void* ud) {
     auto* c = static_cast<SpeakCtx*>(ud);
-    c->userOnBuffer(c->speaker, buf, len, c->userdata);
+    const int16_t* out = c->speaker->ScaleForVolume(buf, len);
+    c->userOnBuffer(c->speaker, out, len, c->userdata);
 }
 
 void SharpVoxSpeaker::SpeakChunkAdapter(const int16_t* buf, int32_t len,
-                                        const PhonemeEvent* events, int32_t count, void* ud) {
+                                        const PhonemeEvent* events, int32_t count,
+                                        const FormantEvent* formants, int32_t formantCount, void* ud) {
     auto* c = static_cast<SpeakCtx*>(ud);
     auto& evs = c->speaker->_phonemeEvents;
     evs.insert(evs.end(), events, events + count);
-    c->userOnChunk(c->speaker, buf, len, events, count, c->userdata);
+    auto& fes = c->speaker->_formantEvents;
+    fes.insert(fes.end(), formants, formants + formantCount);
+    const int16_t* out = c->speaker->ScaleForVolume(buf, len);
+    c->userOnChunk(c->speaker, out, len, events, count, formants, formantCount, c->userdata);
 }
 
 void SharpVoxSpeaker::Speak(const std::string& text,
@@ -70,11 +100,14 @@ void SharpVoxSpeaker::Speak(const std::string& text,
 
 void SharpVoxSpeaker::SpeakWithEvents(const std::string& text,
                                        void (*onChunk)(SharpVoxSpeaker*, const int16_t*, int32_t,
-                                                       const PhonemeEvent*, int32_t, void*),
+                                                       const PhonemeEvent*, int32_t,
+                                                       const FormantEvent*, int32_t, void*),
                                        void* userdata) {
     _isSpeaking = true;
     _phonemeEvents.clear();
+    _formantEvents.clear();
     _nextPhonemeIndex = 0;
+    _nextFormantIndex = 0;
     _pollElapsed = 0.0f;
     try {
         SpeakCtx ctx { this, nullptr, onChunk, userdata };
@@ -87,13 +120,24 @@ void SharpVoxSpeaker::SpeakWithEvents(const std::string& text,
 }
 
 void SharpVoxSpeaker::PollAbsolute(float absoluteSeconds) {
-    if (!OnPhoneme || _nextPhonemeIndex >= static_cast<int32_t>(_phonemeEvents.size())) {
+    if (_nextPhonemeIndex >= static_cast<int32_t>(_phonemeEvents.size()) &&
+        _nextFormantIndex >= static_cast<int32_t>(_formantEvents.size())) {
         return;
     }
     _pollElapsed = absoluteSeconds;
     while (_nextPhonemeIndex < static_cast<int32_t>(_phonemeEvents.size()) &&
            _phonemeEvents[_nextPhonemeIndex].TimeSeconds <= _pollElapsed) {
-        OnPhoneme(_phonemeEvents[_nextPhonemeIndex++]);
+        if (OnPhoneme) {
+            OnPhoneme(_phonemeEvents[_nextPhonemeIndex]);
+        }
+        _nextPhonemeIndex++;
+    }
+    while (_nextFormantIndex < static_cast<int32_t>(_formantEvents.size()) &&
+           _formantEvents[_nextFormantIndex].TimeSeconds <= _pollElapsed) {
+        if (OnFormant) {
+            OnFormant(_formantEvents[_nextFormantIndex]);
+        }
+        _nextFormantIndex++;
     }
 }
 
@@ -143,6 +187,9 @@ void SharpVoxSpeaker::SetPreset(VoicePreset value) {
     _aspirationCycle = v.ACycle;
     _tremoloDepth = v.TremoloDepth;
     _tremoloRate = v.TremoloRate;
+    _vibratoDepth1 = v.VibratoDepth1Raw;
+    _vibratoDepth2 = v.VibratoDepth2Raw;
+    _vibratoRate = v.VibratoFreqRaw;
     _jitter = v.Jitter;
     _shimmer = v.Shimmer;
     _diplophonia = v.Diplophonia;
@@ -159,12 +206,6 @@ void SharpVoxSpeaker::SetPreset(VoicePreset value) {
     _lipRounding = v.LipRounding;
     _f4Freq = v.F4Freq;
     _f4BW = v.F4BW;
-    _f4pFreq = v.F4pFreq;
-    _f4pBW = v.F4pBW;
-    _f5pFreq = v.F5pFreq;
-    _f5pBW = v.F5pBW;
-    _f6pFreq = v.F6pFreq;
-    _f6pBW = v.F6pBW;
     _bwGain1 = v.BwGain1;
     _bwGain2 = v.BwGain2;
     _bwGain3 = v.BwGain3;
@@ -210,6 +251,9 @@ VoiceData SharpVoxSpeaker::BuildVoice() {
             v.ACycle = static_cast<int16_t>(GetAspirationCycle());
             v.TremoloDepth = static_cast<int16_t>(GetTremoloDepth());
             v.TremoloRate = static_cast<int16_t>(GetTremoloRate());
+            v.VibratoDepth1Raw = static_cast<int16_t>(GetVibratoDepth1());
+            v.VibratoDepth2Raw = static_cast<int16_t>(GetVibratoDepth2());
+            v.VibratoFreqRaw = static_cast<int16_t>(GetVibratoRate());
             v.Jitter = static_cast<int16_t>(GetJitter());
             v.Shimmer = static_cast<int16_t>(GetShimmer());
             v.Diplophonia = static_cast<int16_t>(GetDiplophonia());
@@ -229,12 +273,6 @@ VoiceData SharpVoxSpeaker::BuildVoice() {
             v.F5BW = static_cast<int16_t>(GetF5BW());
             v.F4Freq = static_cast<int16_t>(GetF4Freq());
             v.F4BW = static_cast<int16_t>(GetF4BW());
-            v.F4pFreq = static_cast<int16_t>(GetF4pFreq());
-            v.F4pBW = static_cast<int16_t>(GetF4pBW());
-            v.F5pFreq = static_cast<int16_t>(GetF5pFreq());
-            v.F5pBW = static_cast<int16_t>(GetF5pBW());
-            v.F6pFreq = static_cast<int16_t>(GetF6pFreq());
-            v.F6pBW = static_cast<int16_t>(GetF6pBW());
             v.BwGain1 = static_cast<int16_t>(GetBwGain1());
             v.BwGain2 = static_cast<int16_t>(GetBwGain2());
             v.BwGain3 = static_cast<int16_t>(GetBwGain3());
@@ -271,6 +309,12 @@ void SharpVoxSpeaker::ApplyVoiceData(const VoiceData& v) {
     _engine = TtsEngine(v, LibraryData::dictionary,
                         static_cast<size_t>(LibraryData::dictionarySize),
                         MakeSymbolsLookup(), SampleRate);
+}
+
+const char* SharpVoxSpeaker::PhonemeName(int16_t phoneme) {
+    static const auto& names = KlattschParser::GetPhonemeNamesTable();
+    auto it = names.find(phoneme);
+    return it == names.end() ? nullptr : it->second.c_str();
 }
 
 }  // namespace SharpVox

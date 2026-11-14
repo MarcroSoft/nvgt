@@ -6,13 +6,14 @@
 namespace SharpVox {
 
 struct VoiceData {
-    int16_t PitchHz = 208;
+    // Baseline pitch; JSON voice presets override this.
+    int16_t PitchHz = 122;  // 208 was an octave high (pre-HzToPitch-fix tuning)
     float TractScale = 1.0f;
     int16_t PitchRange = 120;
     int16_t StressGain = 60;
     int16_t Rate = 160;
     int16_t VoiceType = 0;
-    int16_t VGain = 60;
+    int16_t VGain = 65;
     int16_t AGain = 0;
     int16_t ACycle = 192;
 
@@ -34,16 +35,10 @@ struct VoiceData {
     int16_t LipRounding = 0;     // -100=spread (F1 up,F2++,F3 up), 0=neutral, +100=rounded (F1 dn,F2--,F3 dn)
     int16_t OnsetHardness = 50;  // 0=soft breathy onset (slow ramp), 50=natural, 100=hard glottal attack (instant)
 
-    int16_t F4Freq = 3650;
-    int16_t F4BW = 200;
+    int16_t F4Freq = 3550;
+    int16_t F4BW = 260;
     int16_t F5Freq = 4500;
-    int16_t F5BW = 250;
-    int16_t F4pFreq = 3650;
-    int16_t F4pBW = 150;
-    int16_t F5pFreq = 4200;
-    int16_t F5pBW = 100;
-    int16_t F6pFreq = 4500;
-    int16_t F6pBW = 150;
+    int16_t F5BW = 330;
 
     int16_t NasalBase = 330;
     int16_t NasalTarg = 400;
@@ -73,7 +68,7 @@ struct VoiceData {
     int16_t RiseAmt1 = 100;    // accent peak target above the phrase floor, pitch units
     int16_t FallAmt1 = -29;
     int32_t Assertiveness = 0x10000;
-    int16_t BaselineFall = 25;
+    int16_t BaselineFall = 18;
     int32_t Quickness = 7200;
     int32_t DownRampStep = 15360;
     int16_t StressDurTime = 50;
@@ -81,6 +76,18 @@ struct VoiceData {
     int16_t VibratoDepth2Raw = 16;
     int16_t VibratoFreqRaw = 65; // 6.5hz
     int16_t Intonation = 100;
+
+    // Fujisaki intonation model (replaces Taylor-tilt).  Command amplitudes
+    // are log-F0 (neper) units; Q16 = 16.16 fixed.
+    int32_t FujisakiPhraseAmpQ16           = (int32_t)(0.19 * 65536);  // phrase command amplitude
+    int32_t FujisakiPrimaryAccentAmpQ16    = (int32_t)(0.18 * 65536);  // nuclear / primary-stress accent
+    int32_t FujisakiHeadAccentAmpQ16       = (int32_t)(0.17 * 65536);  // pre-nuclear head accent (L+H*/H*)
+    int32_t FujisakiSecondaryAccentAmpQ16  = (int32_t)(0.12 * 65536);  // pronoun / light stress accent
+    int32_t FujisakiEmphaticAccentAmpQ16   = (int32_t)(0.30 * 65536);  // emphatic-stress accent
+    int16_t FujisakiPitchCurveExpPct       = 100;   // prominence shaping exponent (100 = 1.0)
+    int16_t FujisakiMonoAccentDurScalePct  = 100;   // mono-syllable accent duration scale (100 = 1.0)
+    int32_t FujisakiCompoundStepQ16        = 0;     // secondary-after-primary step-down (nepers)
+    int16_t FujisakiFinalDropPct           = 19;    // statement final-vowel drop (19 -> end ~0.81x)
 
     int16_t UptalkAmt = 0;        // 0-100: sentence-final rising tendency (0=natural fall, 100=strong uptalk/rise)
     int16_t StressEarly = 0;      // -50 to +50: stress peak alignment (-50=early/assertive, 0=natural, +50=late/hesitant)
@@ -101,13 +108,13 @@ struct VoiceData {
         v.AGain = 400;
         v.ACycle = 16;
         v.F4Freq = 3500;
-        v.F4BW = 50;
+        v.F4BW = 300;
         v.F5Freq = 4500;
         v.F5BW = 250;
-        v.F4pFreq = 4500;
         v.BwGain1 = 100;
         v.BwGain3 = 50;
         v.NGain = 200;
+        v.BaselineFall = 25;
         return v;
     }
 };

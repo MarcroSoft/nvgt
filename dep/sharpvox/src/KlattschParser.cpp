@@ -81,6 +81,8 @@ const std::unordered_map<int16_t, std::string>& KlattschParser::GetPhonemeNamesT
         { _AX_, "AX" }, { _IX_, "IX" }, { _YU_, "YU" },
         { _RX_, "RX" }, { _LX_, "LX" }, { _EL_, "EL" }, { _EN_, "EN" },
         { _DX_, "DX" }, { _TX_, "TX" },
+        { _AYX_, "AYX" }, { _EYX_, "EYX" }, { _OYX_, "OYX" },
+        { _AWX_, "AWX" }, { _OWX_, "OWX" }, { _YUX_, "YUX" },
         { _JP_A_, "JP_A" }, { _JP_I_, "JP_I" }, { _JP_U_, "JP_U" },
         { _JP_E_, "JP_E" }, { _JP_O_, "JP_O" },
     };
@@ -103,6 +105,8 @@ static int16_t LookupKlattschPhoneme(const std::string& code) {
         { "AX", _AX_ }, { "IX", _IX_ }, { "YU", _YU_ },
         { "RX", _RX_ }, { "LX", _LX_ }, { "EL", _EL_ }, { "EN", _EN_ },
         { "DX", _DX_ }, { "TX", _TX_ },
+        { "AYX", _AYX_ }, { "EYX", _EYX_ }, { "OYX", _OYX_ },
+        { "AWX", _AWX_ }, { "OWX", _OWX_ }, { "YUX", _YUX_ },
         { "_", _SIL_ },
         { "A", _JP_A_ }, { "I", _JP_I_ }, { "U", _JP_U_ }, { "E", _JP_E_ }, { "O", _JP_O_ },
     };
@@ -597,7 +601,7 @@ void KlattschParser::EmitPhoneme(const Token& t, float durationMs,
     tok.Phon      = phonId;
     tok.Ctrl      = ctrl;
     tok.UserNote  = note;
-    tok.UserDur   = static_cast<int16_t>(std::max(5.0f, durationMs));
+    tok.UserDur   = static_cast<int32_t>(std::max(5.0f, durationMs));
     tok.Aspiration = clampByte(_curAsp  * 100.0f, 0.0f, 100.0f);
     tok.Tilt       = clampByte(_curTilt * 100.0f, 0.0f, 100.0f);
     tok.Effort     = clampByte(_curEffort * 100.0f, 0.0f, 100.0f);
@@ -674,7 +678,7 @@ std::vector<PhonemeToken> KlattschParser::CompileToTokens(const std::vector<Toke
             PhonemeToken silTok{};
             silTok.Phon    = _SIL_;
             silTok.Ctrl    = kSingingPhon | kSingingDuration | kWord_End;
-            silTok.UserDur  = static_cast<int16_t>(t.Ms);
+            silTok.UserDur  = static_cast<int32_t>(t.Ms);
             silTok.UserNote = static_cast<int16_t>(-_curF0);
             result.push_back(silTok);
             continue;
@@ -725,7 +729,7 @@ std::vector<PhonemeToken> KlattschParser::CompileToTokens(const std::vector<Toke
                 PhonemeToken silTok{};
                 silTok.Phon    = _SIL_;
                 silTok.Ctrl    = kSingingPhon | kSingingDuration | kWord_End;
-                silTok.UserDur  = static_cast<int16_t>(std::abs(t.Value));
+                silTok.UserDur  = static_cast<int32_t>(std::abs(t.Value));
                 silTok.UserNote = static_cast<int16_t>(-_curF0);
                 result.push_back(silTok);
             }

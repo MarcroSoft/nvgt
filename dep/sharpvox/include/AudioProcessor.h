@@ -18,7 +18,7 @@ namespace SharpVox {
         int16_t  Phon       = 0;
         int64_t  Ctrl       = 0;     // kWord_Start, stress flags, etc.
         int16_t  UserPitch  = 0;
-        int16_t  UserDur    = 0;     // 0 = kDur_One, no scaling
+        int32_t  UserDur    = 0;     // 0 = kDur_One, no scaling
         int16_t  UserNote   = 0;
         int16_t  UserRate   = 0;
 
@@ -63,6 +63,13 @@ namespace SharpVox {
         static constexpr int32_t kDurStepRes         = 8;
         static constexpr int32_t kNormal_Speech_Rate = 180;
         static constexpr int32_t kMinRate            = 40;
+        // Post-scale duration floor for sonorant consonants (Klatt 1976
+        // incompressibility). Below this a nasal/liquid/glide has no time for its
+        // formant target to register at extreme rate. Overridable via -D at build time.
+#ifndef SVX_MIN_SONORANT_FRAMES
+#define SVX_MIN_SONORANT_FRAMES 2
+#endif
+        static constexpr int32_t kMinSonorantFrames  = SVX_MIN_SONORANT_FRAMES;
         static constexpr int32_t k1pct               = 655;
         static constexpr int32_t pct                 = 655;
         static constexpr int32_t kOneHalf            = 0x8000;
@@ -83,17 +90,28 @@ namespace SharpVox {
         static constexpr int32_t kHZ_25 = 649 - kNormalPitch;  // 70
         static constexpr int32_t kHZ_28 = 656 - kNormalPitch;  // 77
 
+        // accent and boundary tone placement,  Onsets are frames relative to the vowel start
+        // accent commands lead the stressed vowel by 15-20 ms
+        static constexpr int16_t kHeadAccentOnset    = -3;
+        static constexpr int16_t kNuclearAccentOnset = -4;
+        // boundary tone targets in pitch units, yes/no question rise
+        // start end and comma continuation rise.
+        static constexpr int16_t kQuestRiseStart = 39;
+        static constexpr int16_t kQuestRiseEnd   = 85;
+        static constexpr int16_t kContRiseStart  = 20;
+        static constexpr int16_t kContRiseEnd    = 57;
+
         // Working buffers  sized per-call to actual clause length in Process().
         // Buf1: raw phoneme stream from the front-end (LoadPhonemes).
         // Buf2: allophone-transformed stream (FillPhonBuf2).  Allocated at 2 buf1
         //       capacity to absorb any glottal-stop / plosive-release insertions.
-        // PitchBuf: Tilt events (FillPitchBuf).  Allocated at 6 buf1 capacity.
+        // PitchBuf: prosody events (FillPitchBuf) for PitchInterpolator.  6 buf1.
         // RampSteps: baseline declination steps across phrase resets.  Fixed at
         //            kMaxRamps because that bound is independent of clause length.
         std::vector<int16_t>  _phonBuf1;
         std::vector<int64_t>  _phonCtrlBuf1;
         std::vector<int16_t>  _userPitchBuf1;
-        std::vector<int16_t>  _userDurBuf1;
+        std::vector<int32_t>  _userDurBuf1;
         std::vector<int16_t>  _userNoteBuf1;
         std::vector<int16_t>  _userRateBuf1;
         std::vector<uint8_t>  _aspirationBuf1;
@@ -107,7 +125,7 @@ namespace SharpVox {
         std::vector<int16_t>  _phonBuf2;
         std::vector<int64_t>  _phonCtrlBuf2;
         std::vector<int16_t>  _userPitchBuf2;
-        std::vector<int16_t>  _userDurBuf2;
+        std::vector<int32_t>  _userDurBuf2;
         std::vector<int16_t>  _userNoteBuf2;
         std::vector<int16_t>  _userRateBuf2;
         std::vector<uint8_t>  _aspirationBuf2;
@@ -118,7 +136,7 @@ namespace SharpVox {
         std::vector<uint8_t>  _tremDepthBuf2;
         std::vector<uint8_t>  _tremRateBuf2;
 
-        std::vector<int16_t>  _durBuf;
+        std::vector<int32_t>  _durBuf;
         std::vector<int16_t>  _pitchBufFreq;
         std::vector<int16_t>  _pitchBufTime;
         std::vector<int16_t>  _pitchBufFlags;
@@ -154,14 +172,29 @@ namespace SharpVox {
         int16_t  _vpEmphasisBoost;
         int32_t  _vocalConfidence;
 
+        // Fujisaki intonation model knobs (from VoiceData)
+        int64_t  _vpFujiPhraseAmp;            // Q16 nepers
+        int64_t  _vpFujiPrimaryAccentAmp;     // Q16 nepers
+        int64_t  _vpFujiHeadAccentAmp;        // Q16 nepers
+        int64_t  _vpFujiSecondaryAccentAmp;   // Q16 nepers
+        int64_t  _vpFujiEmphaticAccentAmp;    // Q16 nepers
+        int32_t  _vpFujiPitchCurveExpPct;
+        int32_t  _vpFujiMonoAccentDurScalePct;
+        int64_t  _vpFujiCompoundStep;         // Q16 nepers
+        int32_t  _vpFujiFinalDropPct;
+
         // State computed during pipeline
         int32_t  _phonBuf1InIndex;
         int32_t  _phonBuf2InIndex;
         int32_t  _pitchBufInIndex;
         int32_t  _scanIndex;
-        bool     _isCompoundNoun;
-        int16_t  _endPunctuation;
-        bool     _singing;
+        bool     _isCompoundNoun = false;
+        int16_t  _endPunctuation = _Period_;
+        bool     _singing = false;
+        // clauses already spoken in the current sentence
+        // 0 for a sentence initial clause
+        int16_t  _clauseInSentence = 0;
+        int16_t  _prevEndPunctuation = _Period_;
 
         // Rate params
         int64_t  _rateRatio;

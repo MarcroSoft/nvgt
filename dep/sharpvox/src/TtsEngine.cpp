@@ -1,7 +1,6 @@
 #include "../include/TtsEngine.h"
 #include "../include/AudioProcessor.h"
 #include "../include/SpeechRenderer.h"
-#include "../include/KlattSynthesizer.h"
 #include "../include/KlattschParser.h"
 #include "../include/TextCommands.h"
 #include "../include/Phonemizer.h"
@@ -17,11 +16,6 @@
 namespace { template<class T> T clamp11(T v, T lo, T hi) { return v < lo ? lo : v > hi ? hi : v; } }
 
 namespace SharpVox {
-
-    const std::vector<int32_t>& TtsEngine::SupportedSampleRates() {
-        static std::vector<int32_t> rates = KlattSynthesizer::SupportedSampleRates();
-        return rates;
-    }
 
     TtsEngine::TtsEngine(const uint8_t* dictData, size_t dictSize,
                          std::function<const uint8_t*(const std::string&, size_t&)> symbolsTable,
@@ -73,8 +67,8 @@ namespace SharpVox {
             pi.Step();
             const char* namePtr = AudioProcessor::PhonemeNamesTable[plan.PhonBuf[phonIdx]];
             records.emplace_back(namePtr ? std::string(namePtr) : std::string("?"),
-                frameInPhon, pi.DbgF0(), pi.DbgTiltExcursion(), pi.DbgTiltSmooth(),
-                pi.DbgTiltHeld(), pi.DbgTiltPhase(), pi.DbgBaselineOffset(), pi.DbgTotalOffset());
+                frameInPhon, pi.DbgF0(), pi.DbgFujiExcursion(), pi.DbgPhraseResp(),
+                pi.DbgAccentResp(), pi.DbgBaselineOffset(), pi.DbgTotalOffset());
             frameInPhon++;
             if (frameInPhon >= plan.DurBuf[phonIdx]) { phonIdx++; frameInPhon = 0; }
         }
@@ -159,14 +153,20 @@ namespace SharpVox {
     }
 
     void TtsEngine::ProcessSentenceStreamingFromPlan(const ClausePlan& plan,
-                                                     std::function<void(const int16_t*, int32_t)> onBuffer) {
+                                                     std::function<void(const int16_t*, int32_t)> onBuffer,
+                                                     std::function<void(int32_t, const Frame&)> onFrame) {
         const int32_t framesPerChunk = 10;
         std::vector<int16_t> audioChunk(framesPerChunk * _synth.SampFrameLen, 0);
         int32_t frameInChunk = 0;
+        int32_t frameIndex = 0;
 
         _renderer.RenderStreaming(plan, [&](const Frame& frame) {
+            if (onFrame) {
+                onFrame(frameIndex, frame);
+            }
             _synth.SynthesizeFrame(frame, audioChunk.data(), frameInChunk * _synth.SampFrameLen);
             frameInChunk++;
+            frameIndex++;
 
             if (frameInChunk >= framesPerChunk) {
                 onBuffer(audioChunk.data(), (int32_t)audioChunk.size());
@@ -183,13 +183,18 @@ namespace SharpVox {
 
     void TtsEngine::SpeakWithEvents(
         const std::string& text,
-        void (*onChunk)(const int16_t*, int32_t, const PhonemeEvent*, int32_t, void*),
+        void (*onChunk)(const int16_t*, int32_t, const PhonemeEvent*, int32_t,
+                        const FormantEvent*, int32_t, void*),
         void* userdata) {
         int32_t sampleOffset = 0;
         bool rendered = false;
+        // 60 Hz tick counter, kept across clauses so the formant grid and its
+        // timestamps stay absolute from the start of the utterance.
+        int32_t tickIndex = 0;
 
         // Renders one clause plan, slicing its events into the chunks they fall in.
         auto speakPlan = [&](const ClausePlan& plan, bool wordStarts) {
+            int32_t clauseStart = sampleOffset;
             std::vector<PhonemeEvent> events;
             std::vector<int32_t> onsets;
             int32_t frameOff = 0;
@@ -208,23 +213,49 @@ namespace SharpVox {
             int32_t planEnd = sampleOffset + frameOff * _synth.SampFrameLen;
             size_t cursor = 0;
 
+            std::vector<FormantEvent> formantEvents;
+            std::vector<int32_t> formantSamples;
+            size_t formantCursor = 0;
+
             // Fresh renderer/synth per clause, matching the previous batched behavior.
             ResetSynthVoice();
             rendered = true;
             ProcessSentenceStreamingFromPlan(plan, [&](const int16_t* buf, int32_t len) {
                 size_t first = cursor;
+                size_t fFirst = formantCursor;
                 // zero-duration tail events sit exactly on planEnd; flush with the final chunk
                 int32_t limit = sampleOffset + len;
                 if (limit >= planEnd) { limit = planEnd + 1; }
                 while (cursor < onsets.size() && onsets[cursor] < limit) { cursor++; }
-                onChunk(buf, len, events.data() + first, (int32_t)(cursor - first), userdata);
+                while (formantCursor < formantSamples.size() && formantSamples[formantCursor] < limit) {
+                    formantCursor++;
+                }
+                onChunk(buf, len, events.data() + first, (int32_t)(cursor - first),
+                        formantEvents.data() + fFirst, (int32_t)(formantCursor - fFirst), userdata);
                 sampleOffset += len;
+            }, [&](int32_t frameIndex, const Frame& frame) {
+                // emit the formant events
+                int32_t frameStart = clauseStart + frameIndex * _synth.SampFrameLen;
+                int32_t frameEnd = frameStart + _synth.SampFrameLen;
+                float f1 = (float)PitchToHz(frame.F1);
+                float f2 = (float)PitchToHz(frame.F2);
+                float f3 = (float)PitchToHz(frame.F3);
+                while (true) {
+                    int32_t tickSample = (int32_t)(((int64_t)tickIndex * SampleRate + 30) / 60);
+                    if (tickSample >= frameEnd) {
+                        break;
+                    }
+                    formantEvents.emplace_back(tickIndex / 60.0f, f1, f2, f3);
+                    formantSamples.push_back(tickSample);
+                    tickIndex++;
+                }
             });
-            if (cursor < onsets.size()) {
+            if (cursor < onsets.size() || formantCursor < formantSamples.size()) {
                 // plan produced no audio frames; deliver its events with an empty chunk
                 static const int16_t kEmpty = 0;
-                onChunk(&kEmpty, 0, events.data() + cursor,
-                    (int32_t)(onsets.size() - cursor), userdata);
+                onChunk(&kEmpty, 0, events.data() + cursor, (int32_t)(onsets.size() - cursor),
+                        formantEvents.data() + formantCursor,
+                        (int32_t)(formantSamples.size() - formantCursor), userdata);
             }
         };
 
@@ -327,18 +358,21 @@ namespace SharpVox {
 
     void TtsEngine::ResetSynthVoice() {
         _renderer = SpeechRenderer(_voice);
-#ifdef SHARPVOX_FIXED_POINT_SYNTH
         _synth = KlattSynthesizerFP(SampleRate);
-#else
-        _synth = KlattSynthesizer(SampleRate);
-#endif
         int16_t lo = _voice.LarynxOffset;
+        // Parallel frication bank: baseline formants scaled by TractScale (small
+        // tract -> higher frication). Not voice-tunable; user control was retired
+        // since it harms intelligibility. F6pBW=700 is the wide anti-whistle shelf.
+        float ts = _voice.TractScale > 0 ? _voice.TractScale : 1.0f;
+        int16_t f4p = (int16_t)clamp11<int32_t>((int32_t)(3650 * ts) + lo, 100, 8000);
+        int16_t f5p = (int16_t)clamp11<int32_t>((int32_t)(4200 * ts) + lo, 100, 8000);
+        int16_t f6p = (int16_t)clamp11<int32_t>((int32_t)(6000 * ts) + lo, 100, 8000);
         _synth.SetVoice(_voice.NGain, true,
             (int16_t)clamp11<int32_t>(_voice.F4Freq + lo,  100, 8000), _voice.F4BW,
             (int16_t)clamp11<int32_t>(_voice.F5Freq + lo,  100, 8000), _voice.F5BW,
-            (int16_t)clamp11<int32_t>(_voice.F4pFreq + lo, 100, 8000), _voice.F4pBW,
-            (int16_t)clamp11<int32_t>(_voice.F5pFreq + lo, 100, 8000), _voice.F5pBW,
-            (int16_t)clamp11<int32_t>(_voice.F6pFreq + lo, 100, 8000), _voice.F6pBW,
+            f4p, 150,
+            f5p, 100,
+            f6p, 700,
             _voice.NasalBase, _voice.NasalBW,
             _voice.AGain, _voice.ACycle);
         _synth.Jitter          = _voice.Jitter;

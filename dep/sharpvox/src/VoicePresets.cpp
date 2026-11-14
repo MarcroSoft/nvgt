@@ -12,7 +12,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "beth") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 162;
-        outVoice.PitchHz = 476;
+        outVoice.PitchHz = 238;
         outVoice.VoiceType = 1;
         outVoice.TractScale = 1.09f;
         outVoice.VGain = 60;
@@ -21,14 +21,8 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NGain = 107;
         outVoice.F4Freq = 4380;
         outVoice.F4BW = 262;
-        outVoice.F5Freq = 2510;
-        outVoice.F5BW = 2025;
-        outVoice.F4pFreq = 4384;
-        outVoice.F4pBW = 154;
-        outVoice.F5pFreq = 4199;
-        outVoice.F5pBW = 97;
-        outVoice.F6pFreq = 4493;
-        outVoice.F6pBW = 149;
+        outVoice.F5Freq = 5500;
+        outVoice.F5BW = 300;
         outVoice.BwGain1 = 134;
         outVoice.BwGain2 = 120;
         outVoice.BwGain3 = 105;
@@ -37,7 +31,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 53;
         outVoice.PitchRange = 148;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 100;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 38;
         outVoice.FallAmt = -38;
         outVoice.BaselineFall = 53;
@@ -46,7 +40,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "chris") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 162;
-        outVoice.PitchHz = 276;
+        outVoice.PitchHz = 138;
         outVoice.VoiceType = 0;
         outVoice.TractScale = 0.99f;
         outVoice.VGain = 58;
@@ -57,12 +51,6 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.F4BW = 255;
         outVoice.F5Freq = 4050;
         outVoice.F5BW = 290;
-        outVoice.F4pFreq = 3574;
-        outVoice.F4pBW = 148;
-        outVoice.F5pFreq = 4194;
-        outVoice.F5pBW = 104;
-        outVoice.F6pFreq = 4513;
-        outVoice.F6pBW = 156;
         outVoice.BwGain1 = 148;
         outVoice.BwGain2 = 109;
         outVoice.BwGain3 = 107;
@@ -71,7 +59,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 64;
         outVoice.PitchRange = 145;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 101;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 35;
         outVoice.FallAmt = -38;
         outVoice.BaselineFall = 43;
@@ -80,7 +68,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "deborah") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 148;
-        outVoice.PitchHz = 336;
+        outVoice.PitchHz = 168;
         outVoice.VoiceType = 1;
         outVoice.TractScale = 1.05f;
         outVoice.VGain = 60;
@@ -89,14 +77,8 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NGain = 99;
         outVoice.F4Freq = 4020;
         outVoice.F4BW = 250;
-        outVoice.F5Freq = 2503;
-        outVoice.F5BW = 2052;
-        outVoice.F4pFreq = 4026;
-        outVoice.F4pBW = 142;
-        outVoice.F5pFreq = 4196;
-        outVoice.F5pBW = 101;
-        outVoice.F6pFreq = 4499;
-        outVoice.F6pBW = 142;
+        outVoice.F5Freq = 5300;
+        outVoice.F5BW = 300;
         outVoice.BwGain1 = 136;
         outVoice.BwGain2 = 130;
         outVoice.BwGain3 = 100;
@@ -105,7 +87,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 58;
         outVoice.PitchRange = 72;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 96;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 22;
         outVoice.FallAmt = -25;
         outVoice.BaselineFall = 62;
@@ -114,7 +96,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "jack") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 155;
-        outVoice.PitchHz = 310;
+        outVoice.PitchHz = 155;
         outVoice.VoiceType = 0;
         outVoice.TractScale = 1.02f;
         outVoice.VGain = 58;
@@ -125,12 +107,6 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.F4BW = 275;
         outVoice.F5Freq = 4280;
         outVoice.F5BW = 315;
-        outVoice.F4pFreq = 3714;
-        outVoice.F4pBW = 157;
-        outVoice.F5pFreq = 4210;
-        outVoice.F5pBW = 92;
-        outVoice.F6pFreq = 4503;
-        outVoice.F6pBW = 150;
         outVoice.BwGain1 = 126;
         outVoice.BwGain2 = 107;
         outVoice.BwGain3 = 118;
@@ -139,7 +115,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 67;
         outVoice.PitchRange = 80;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 106;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 34;
         outVoice.FallAmt = -17;
         outVoice.BaselineFall = 47;
@@ -148,7 +124,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "jess") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 166;
-        outVoice.PitchHz = 436;
+        outVoice.PitchHz = 218;
         outVoice.VoiceType = 1;
         outVoice.TractScale = 1.07f;
         outVoice.VGain = 60;
@@ -157,14 +133,8 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NGain = 97;
         outVoice.F4Freq = 4460;
         outVoice.F4BW = 270;
-        outVoice.F5Freq = 2508;
-        outVoice.F5BW = 2042;
-        outVoice.F4pFreq = 4464;
-        outVoice.F4pBW = 149;
-        outVoice.F5pFreq = 4203;
-        outVoice.F5pBW = 106;
-        outVoice.F6pFreq = 4507;
-        outVoice.F6pBW = 153;
+        outVoice.F5Freq = 5400;
+        outVoice.F5BW = 300;
         outVoice.BwGain1 = 138;
         outVoice.BwGain2 = 120;
         outVoice.BwGain3 = 103;
@@ -173,7 +143,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 50;
         outVoice.PitchRange = 228;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 104;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 40;
         outVoice.FallAmt = -35;
         outVoice.BaselineFall = 47;
@@ -182,7 +152,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "john") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 158;
-        outVoice.PitchHz = 242;
+        outVoice.PitchHz = 121;
         outVoice.VoiceType = 0;
         outVoice.TractScale = 0.96f;
         outVoice.VGain = 60;
@@ -205,16 +175,10 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.LipRounding = 0;
         outVoice.OnsetHardness = 50;
         outVoice.NGain = 100;
-        outVoice.F4Freq = 2392;
+        outVoice.F4Freq = 3400;
         outVoice.F4BW = 240;
         outVoice.F5Freq = 3780;
         outVoice.F5BW = 265;
-        outVoice.F4pFreq = 3415;
-        outVoice.F4pBW = 152;
-        outVoice.F5pFreq = 4198;
-        outVoice.F5pBW = 100;
-        outVoice.F6pFreq = 4508;
-        outVoice.F6pBW = 150;
         outVoice.BwGain1 = 136;
         outVoice.BwGain2 = 112;
         outVoice.BwGain3 = 101;
@@ -223,7 +187,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 60;
         outVoice.PitchRange = 118;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 94;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 37;
         outVoice.FallAmt = -34;
         outVoice.BaselineFall = 47;
@@ -232,7 +196,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "matt") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 154;
-        outVoice.PitchHz = 172;
+        outVoice.PitchHz = 86;
         outVoice.VoiceType = 0;
         outVoice.TractScale = 0.92f;
         outVoice.VGain = 60;
@@ -243,12 +207,6 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.F4BW = 200;
         outVoice.F5Freq = 3620;
         outVoice.F5BW = 238;
-        outVoice.F4pFreq = 3142;
-        outVoice.F4pBW = 155;
-        outVoice.F5pFreq = 4192;
-        outVoice.F5pBW = 97;
-        outVoice.F6pFreq = 4496;
-        outVoice.F6pBW = 147;
         outVoice.BwGain1 = 142;
         outVoice.BwGain2 = 111;
         outVoice.BwGain3 = 109;
@@ -257,7 +215,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 70;
         outVoice.PitchRange = 65;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 90;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 34;
         outVoice.FallAmt = -27;
         outVoice.BaselineFall = 63;
@@ -265,7 +223,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     }
     if (lower == "pirate") {
         outVoice = VoiceData::baseline_voice();
-        outVoice.PitchHz = 282;
+        outVoice.PitchHz = 141;
         outVoice.TractScale = 0.944f;
         outVoice.VoiceType = 0;
         outVoice.Rate = 178;
@@ -277,15 +235,15 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.Diplophonia = 41;
         outVoice.SubglottalAmt = 6;
         outVoice.PitchRange = 149;
-        outVoice.Intonation = 113;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 46;
         outVoice.FallAmt = -18;
         outVoice.BaselineFall = 58;
         outVoice.StressGain = 63;
         outVoice.F4Freq = 3100;
         outVoice.F4BW = 294;
-        outVoice.F5Freq = 2759;
-        outVoice.F5BW = 200;
+        outVoice.F5Freq = 4600;
+        outVoice.F5BW = 300;
         outVoice.BwGain1 = 98;
         outVoice.BwGain2 = 78;
         outVoice.BwGain3 = 95;
@@ -302,12 +260,6 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.OQStressLink = 0;
         outVoice.OQF0Link = 0;
         outVoice.PitchOffsetHz = 0;
-        outVoice.F4pFreq = 3661;
-        outVoice.F4pBW = 214;
-        outVoice.F5pFreq = 3800;
-        outVoice.F5pBW = 200;
-        outVoice.F6pFreq = 4500;
-        outVoice.F6pBW = 150;
         outVoice.NasalAmt = 0;
         outVoice.VGain = 60;
         return true;
@@ -315,23 +267,17 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "tommy") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 164;
-        outVoice.PitchHz = 636;
+        outVoice.PitchHz = 318;
         outVoice.VoiceType = 1;
         outVoice.TractScale = 1.22f;
         outVoice.VGain = 60;
         outVoice.AGain = 160;
         outVoice.ACycle = 192;
         outVoice.NGain = 96;
-        outVoice.F4Freq = 2510;
-        outVoice.F4BW = 2030;
-        outVoice.F5Freq = 2508;
-        outVoice.F5BW = 2038;
-        outVoice.F4pFreq = 2514;
-        outVoice.F4pBW = 144;
-        outVoice.F5pFreq = 4204;
-        outVoice.F5pBW = 99;
-        outVoice.F6pFreq = 4502;
-        outVoice.F6pBW = 151;
+        outVoice.F4Freq = 4800;
+        outVoice.F4BW = 300;
+        outVoice.F5Freq = 6200;
+        outVoice.F5BW = 400;
         outVoice.BwGain1 = 138;
         outVoice.BwGain2 = 128;
         outVoice.BwGain3 = 109;
@@ -340,7 +286,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 54;
         outVoice.PitchRange = 235;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 95;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 23;
         outVoice.FallAmt = -22;
         outVoice.BaselineFall = 45;
@@ -349,7 +295,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
     if (lower == "whisper") {
         outVoice = VoiceData::baseline_voice();
         outVoice.Rate = 148;
-        outVoice.PitchHz = 350;
+        outVoice.PitchHz = 175;
         outVoice.VoiceType = 1;
         outVoice.TractScale = 1.0f;
         outVoice.VGain = 0;
@@ -358,14 +304,8 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NGain = 102;
         outVoice.F4Freq = 4480;
         outVoice.F4BW = 420;
-        outVoice.F5Freq = 2508;
-        outVoice.F5BW = 2057;
-        outVoice.F4pFreq = 4492;
-        outVoice.F4pBW = 146;
-        outVoice.F5pFreq = 4199;
-        outVoice.F5pBW = 100;
-        outVoice.F6pFreq = 4507;
-        outVoice.F6pBW = 150;
+        outVoice.F5Freq = 5100;
+        outVoice.F5BW = 450;
         outVoice.BwGain1 = 138;
         outVoice.BwGain2 = 115;
         outVoice.BwGain3 = 111;
@@ -374,7 +314,7 @@ bool VoicePresets::TryGet(const std::string& name, VoiceData& outVoice) {
         outVoice.NasalBW = 67;
         outVoice.PitchRange = 170;
         outVoice.StressGain = 60;
-        outVoice.Intonation = 90;
+        outVoice.Intonation = 150;
         outVoice.RiseAmt = 22;
         outVoice.FallAmt = -24;
         outVoice.BaselineFall = 60;
@@ -433,12 +373,6 @@ bool VoicePresets::SetParam(VoiceData& v, const std::string& name, float value) 
     else if (name == "f4bw")           { v.F4BW             = clamp(value,   10,   3000); }
     else if (name == "f5freq")         { v.F5Freq           = clamp(value,  100,   7000); }
     else if (name == "f5bw")           { v.F5BW             = clamp(value,   10,   3000); }
-    else if (name == "f4pfreq")        { v.F4pFreq          = clamp(value,  100,   7000); }
-    else if (name == "f4pbw")          { v.F4pBW            = clamp(value,   10,   3000); }
-    else if (name == "f5pfreq")        { v.F5pFreq          = clamp(value,  100,   7000); }
-    else if (name == "f5pbw")          { v.F5pBW            = clamp(value,   10,   3000); }
-    else if (name == "f6pfreq")        { v.F6pFreq          = clamp(value,  100,   7000); }
-    else if (name == "f6pbw")          { v.F6pBW            = clamp(value,   10,   3000); }
     else if (name == "nasalbase")      { v.NasalBase        = clamp(value,  100,    800); }
     else if (name == "nasaltarg")      { v.NasalTarg        = clamp(value,  100,    800); }
     else if (name == "nasalbw")        { v.NasalBW          = clamp(value,   10,    500); }
@@ -468,8 +402,20 @@ bool VoicePresets::SetParam(VoiceData& v, const std::string& name, float value) 
     else if (name == "vibratodepth1")  { v.VibratoDepth1Raw = clamp(value,    0,    100); }
     else if (name == "vibratodepth2")  { v.VibratoDepth2Raw = clamp(value,    0,    100); }
     else if (name == "vibratofreq")    { v.VibratoFreqRaw   = clamp(value,    0,    100); }
+    else if (name == "vibratodepth")   { v.VibratoDepth1Raw = v.VibratoDepth2Raw = clamp(value, 0, 100); }
+    else if (name == "vibratorate")    { v.VibratoFreqRaw   = clamp(value,    0,    100); }
     else if (name == "rvbdelay")       { v.RvbDelay         = clamp(value,    0,    500); }
     else if (name == "rvbdepth")       { v.RvbDepth         = clamp(value,    0,    100); }
+    // Fujisaki model knobs (amplitudes in log-F0 / neper units, TGSpeechBox-compatible)
+    else if (name == "fujisakiphraseamp")         { v.FujisakiPhraseAmpQ16          = (int32_t)(clampf(value, 0.0f, 1.0f) * 65536); }
+    else if (name == "fujisakiprimaryaccentamp")  { v.FujisakiPrimaryAccentAmpQ16   = (int32_t)(clampf(value, 0.0f, 1.0f) * 65536); }
+    else if (name == "fujisakiheadaccentamp")      { v.FujisakiHeadAccentAmpQ16      = (int32_t)(clampf(value, 0.0f, 1.0f) * 65536); }
+    else if (name == "fujisakisecondaryaccentamp"){ v.FujisakiSecondaryAccentAmpQ16 = (int32_t)(clampf(value, 0.0f, 1.0f) * 65536); }
+    else if (name == "fujisakiemphaticaccentamp") { v.FujisakiEmphaticAccentAmpQ16  = (int32_t)(clampf(value, 0.0f, 1.0f) * 65536); }
+    else if (name == "fujisakipitchcurveexp")     { v.FujisakiPitchCurveExpPct      = clamp(value,   10,   300); }
+    else if (name == "fujisakimonoaccentdur")     { v.FujisakiMonoAccentDurScalePct = clamp(value,   20,   200); }
+    else if (name == "fujisakicompoundstep")      { v.FujisakiCompoundStepQ16       = (int32_t)(clampf(value, 0.0f, 0.5f) * 65536); }
+    else if (name == "fujisakifinaldrop")         { v.FujisakiFinalDropPct          = clamp(value,    0,    50); }
     else return false;
     return true;
 }

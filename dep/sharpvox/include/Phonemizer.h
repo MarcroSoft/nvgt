@@ -82,7 +82,7 @@ namespace SharpVox {
 
         // Stream -> PhonemeToken list
         void AppendWordTokens(std::vector<PhonemeToken>& tokens, const std::vector<uint8_t>& stream,
-                              bool isContent, bool isPronoun = false);
+                              bool isContent, bool isPronoun = false, bool isLight = false);
     };
 
 }  // namespace SharpVox

@@ -1,6 +1,7 @@
 #ifndef SHARPVOX_H
 #define SHARPVOX_H
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -23,20 +24,29 @@ public:
     void Speak(const std::string& text,
                void (*onBuffer)(SharpVoxSpeaker* speaker, const int16_t* buf, int32_t len, void* userdata),
                void* userdata = nullptr);
-    // Streams audio chunks with the phoneme events whose onsets fall inside each chunk.
-    // The full event list accumulates in PhonemeEvents() as chunks are delivered.
+    // Streams audio chunks with the phoneme events whose onsets fall inside each
+    // chunk, plus the 60 Hz formant stream. The full lists accumulate in
+    // PhonemeEvents() and FormantEvents() as chunks are delivered.
     void SpeakWithEvents(const std::string& text,
                          void (*onChunk)(SharpVoxSpeaker* speaker, const int16_t* buf, int32_t len,
-                                         const PhonemeEvent* events, int32_t count, void* userdata),
+                                         const PhonemeEvent* events, int32_t count,
+                                         const FormantEvent* formants, int32_t formantCount,
+                                         void* userdata),
                          void* userdata = nullptr);
 
     // Polls pending phoneme events up to absoluteSeconds and fires OnPhoneme for each
     void PollAbsolute(float absoluteSeconds);
 
+    // Symbolic name for a phoneme id, or nullptr if unnamed/unknown
+    static const char* PhonemeName(int16_t phoneme);
+
     // Callback fired by PollAbsolute for each due phoneme event
     std::function<void(const PhonemeEvent&)> OnPhoneme;
+    // additional formant callback
+    std::function<void(const FormantEvent&)> OnFormant;
 
     const std::vector<PhonemeEvent>& PhonemeEvents() const { return _phonemeEvents; }
+    const std::vector<FormantEvent>& FormantEvents() const { return _formantEvents; }
 
     void SetVoice(VoiceData voice);
     void ApplyVoice();
@@ -56,8 +66,6 @@ public:
     bool KlattschMode = false;
     float KlBaseF0 = 120.0f;
     float KlRate = 110.0f;
-    float KlVibrato = 0.0f;
-    float KlVibRate = 5.0f;
     float KlAsp = 0.0f;
     float KlTilt = 0.0f;
     float KlEffort = 0.5f;
@@ -86,6 +94,28 @@ public:
 
     int32_t GetTremoloRate() const { return _tremoloRate; }
     void SetTremoloRate(int32_t v) { _tremoloRate = v; MarkCustom(); }
+
+    // Voice vibrato default; seeds both core and klattsch synth vibrato per speak.
+    // Depth1/Depth2 are the alternating half-cycle depths; the plain depth
+    // accessor reads depth1 and writes both for symmetric vibrato.
+    int32_t GetVibratoDepth() const { return _vibratoDepth1; }
+    void SetVibratoDepth(int32_t v) { _vibratoDepth1 = v; _vibratoDepth2 = v; MarkCustom(); }
+
+    int32_t GetVibratoDepth1() const { return _vibratoDepth1; }
+    void SetVibratoDepth1(int32_t v) { _vibratoDepth1 = v; MarkCustom(); }
+
+    int32_t GetVibratoDepth2() const { return _vibratoDepth2; }
+    void SetVibratoDepth2(int32_t v) { _vibratoDepth2 = v; MarkCustom(); }
+
+    int32_t GetVibratoRate() const { return _vibratoRate; }
+    void SetVibratoRate(int32_t v) { _vibratoRate = v; MarkCustom(); }
+
+    // Core vibrato depth is 0.128*raw pitch-units peak (256 units/octave, log).
+    // Klattsch synth vibrato is additive Hz, so convert at the base F0 to match.
+    float VibratoDepthToKlattschHz() const {
+        double peakUnits = 0.128 * (double)_vibratoDepth1;
+        return (float)(KlBaseF0 * (std::pow(2.0, peakUnits / 256.0) - 1.0));
+    }
 
     // Glottal source
     int32_t GetJitter() const { return _jitter; }
@@ -146,24 +176,6 @@ public:
 
     int32_t GetF4BW() const { return _f4BW; }
     void SetF4BW(int32_t v) { _f4BW = v; MarkCustom(); }
-
-    int32_t GetF4pFreq() const { return _f4pFreq; }
-    void SetF4pFreq(int32_t v) { _f4pFreq = v; MarkCustom(); }
-
-    int32_t GetF4pBW() const { return _f4pBW; }
-    void SetF4pBW(int32_t v) { _f4pBW = v; MarkCustom(); }
-
-    int32_t GetF5pFreq() const { return _f5pFreq; }
-    void SetF5pFreq(int32_t v) { _f5pFreq = v; MarkCustom(); }
-
-    int32_t GetF5pBW() const { return _f5pBW; }
-    void SetF5pBW(int32_t v) { _f5pBW = v; MarkCustom(); }
-
-    int32_t GetF6pFreq() const { return _f6pFreq; }
-    void SetF6pFreq(int32_t v) { _f6pFreq = v; MarkCustom(); }
-
-    int32_t GetF6pBW() const { return _f6pBW; }
-    void SetF6pBW(int32_t v) { _f6pBW = v; MarkCustom(); }
 
     int32_t GetBwGain1() const { return _bwGain1; }
     void SetBwGain1(int32_t v) { _bwGain1 = v; MarkCustom(); }
@@ -232,7 +244,10 @@ private:
     bool _isSpeaking = false;
 
     std::vector<PhonemeEvent> _phonemeEvents;
+    std::vector<FormantEvent> _formantEvents;
+    std::vector<int16_t> _scaleScratch;  // gain staging output buffer
     int32_t _nextPhonemeIndex = 0;
+    int32_t _nextFormantIndex = 0;
     float _pollElapsed = 0.0f;
 
     bool _applyingPreset = false;
@@ -245,6 +260,9 @@ private:
     int32_t _aspirationCycle = 192;
     int32_t _tremoloDepth = 0;
     int32_t _tremoloRate = 0;
+    int32_t _vibratoDepth1 = 14;
+    int32_t _vibratoDepth2 = 16;
+    int32_t _vibratoRate = 65;
 
     // Glottal source
     int32_t _jitter = 0;
@@ -271,12 +289,6 @@ private:
     int32_t _f5BW = 250;
     int32_t _f4Freq = 3000;
     int32_t _f4BW = 200;
-    int32_t _f4pFreq = 3600;
-    int32_t _f4pBW = 150;
-    int32_t _f5pFreq = 3750;
-    int32_t _f5pBW = 100;
-    int32_t _f6pFreq = 4500;
-    int32_t _f6pBW = 150;
     int32_t _bwGain1 = 150;
     int32_t _bwGain2 = 100;
     int32_t _bwGain3 = 100;
@@ -315,7 +327,10 @@ private:
     struct SpeakCtx;
     static void SpeakBufAdapter(const int16_t* buf, int32_t len, void* ud);
     static void SpeakChunkAdapter(const int16_t* buf, int32_t len,
-                                  const PhonemeEvent* events, int32_t count, void* ud);
+                                  const PhonemeEvent* events, int32_t count,
+                                  const FormantEvent* formants, int32_t formantCount, void* ud);
+
+    const int16_t* ScaleForVolume(const int16_t* buf, int32_t len);
 };
 
 }  // namespace SharpVox

@@ -74,46 +74,92 @@ static inline float fp_iir_ff(float A, float B, float C,
     return y;
 }
 
+// Matched one-zero resonator step (Vicanek 2016): numerator b0 + b1*z^-1
+// over the classic Klatt pole pair. x1 holds the previous input sample.
+static inline float fp_iir_zff(float b0, float b1, float B, float C,
+                                 float x, float& x1, float& d1, float& d2) {
+    float y = b0 * x + b1 * x1 + B * d1 + C * d2;
+    x1 = x;
+    d2 = d1;
+    d1 = y;
+    return y;
+}
+
 // KLGLOTT88 flow tau^2*(1-tau) blended with the legacy pulse; kGlotTilt sets
-// brightness (0 = full bass/-6 dB/oct, higher lifts presence).
+// brightness (0 = full bass/-6 dB/oct, higher lifts 1-3 kHz presence).
 static constexpr float kGlotTilt = 0.10f;
 static inline float GlotPulse(float tau) {
     return (1.0f - kGlotTilt) * (tau * tau * (1.0f - tau))
          + kGlotTilt * (tau * (0.33333333f - tau * 0.5f));
 }
 
-struct SampleRatePresetFP { float NoiseScale; float OutputGain; };
-static const std::map<int32_t, SampleRatePresetFP> _ratePresetsFP = {
-    { 8000,  { 0.57f, 1.76f  } },
-    { 11025, { 0.20f, 2.57f  } },
-    { 22050, { 1.00f, 5.00f  } },
-    { 44100, { 1.51f, 8.53f  } },
-    { 48000, { 1.65f, 8.93f  } },
-    { 96000, { 3.09f, 11.59f } },
-};
-
-std::vector<int32_t> KlattSynthesizerFP::SupportedSampleRates() {
-    std::vector<int32_t> keys;
-    keys.reserve(_ratePresetsFP.size());
-    for (auto& kv : _ratePresetsFP) keys.push_back(kv.first);
-    return keys;
+// polyBLEP band-limited value-step correction (t = phase distance in [0,1), dt = f0/fs).
+// Scale by step/2 at the call site.
+static inline float PolyBlep(float t, float dt) {
+    if (t < dt) {
+        float q = t / dt;
+        return 2.0f * q - q * q - 1.0f;
+    }
+    if (t > 1.0f - dt) {
+        float q = (t - 1.0f) / dt;
+        return q * q + 2.0f * q + 1.0f;
+    }
+    return 0.0f;
 }
 
-//  Constructor 
+// integral of polyBLEP, for slope kinks
+static inline float PolyBlamp(float t, float dt) {
+    if (t < dt) {
+        float q = t / dt;
+        float o = 1.0f - q;
+        return (dt / 3.0f) * o * o * o;
+    }
+    if (t > 1.0f - dt) {
+        float q = (t - 1.0f) / dt;
+        float o = 1.0f + q;
+        return (dt / 3.0f) * o * o * o;
+    }
+    return 0.0f;
+}
+
+// KLGLOTT pulse + polyBLEP/polyBLAMP corrections for its closure step and slope kinks
+// kills low sample rate foldback
+static inline float GlotPulseBL(int32_t phi, int32_t ne, int32_t phaseInc) {
+    float s = 0.0f;
+    if (phi < ne) {
+        s = GlotPulse((float)phi / (float)ne);
+    }
+    float dt = (float)phaseInc * (1.0f / 16777216.0f);
+    if (dt > 0.0f && dt < 1.0f) {
+        float tCl = (float)((phi - ne) & 0xFFFFFF) * (1.0f / 16777216.0f);
+        float tOn = (float)(phi & 0xFFFFFF) * (1.0f / 16777216.0f);
+        float invOq = 16777216.0f / (float)ne;
+        s += (1.0f / 120.0f) * PolyBlep(tCl, dt)
+           + 0.9667f * invOq * PolyBlamp(tCl, dt)
+           - 0.0333f * invOq * PolyBlamp(tOn, dt);
+    }
+    return s;
+}
+
+//  Constructor
 
 KlattSynthesizerFP::KlattSynthesizerFP(int32_t sampleRate) {
-    auto it = _ratePresetsFP.find(sampleRate);
-    if (it == _ratePresetsFP.end()) {
+    if (sampleRate < KMinSampleRate || sampleRate > KMaxSampleRate) {
         throw std::invalid_argument(
-            "Unsupported sample rate " + std::to_string(sampleRate) + " Hz.");
+            "Sample rate " + std::to_string(sampleRate) + " Hz outside supported range "
+            + std::to_string(KMinSampleRate) + "-" + std::to_string(KMaxSampleRate) + " Hz.");
     }
 
     InitSinLut();
 
     _sampleRate     = sampleRate;
     _internalRate   = sampleRate;
-    _noiseScale     = it->second.NoiseScale;
-    _outputGain     = it->second.OutputGain;
+    // White noise PSD in-band falls as 1/fs, so amplitude must rise as
+    // sqrt(fs) to keep noise loudness rate-invariant through fixed-Hz filters.
+    _noiseScale     = sqrtf((float)sampleRate / 22050.0f);
+    // Rate-invariant since the preemph stage scales by fs/22050; the constant
+    // is anchored so 48 kHz keeps the level the F0 headroom was tuned at.
+    _outputGain     = 4.10f;
     _speechVolume   = 150.0f;
     _hfEmph         = true;
 
@@ -124,6 +170,10 @@ KlattSynthesizerFP::KlattSynthesizerFP(int32_t sampleRate) {
     // A fixed 0.97 puts the zero at a fixed fraction of Nyquist, which costs
     // ~1.5 dB of 2-4 kHz energy per doubling of rate. 22050 is the tuning anchor.
     _preemphA_q15 = (int32_t)(std::pow(0.97, 22050.0 / (double)sampleRate) * 32768.0 + 0.5);
+
+    // The differentiator's passband gain falls as 1/fs with the corner fixed
+    // in Hz; scaling by fs/22050 makes the output level rate-invariant.
+    _preemphScale_q12 = (int32_t)(4096.0 * sampleRate / 22050.0 + 0.5);
 
     // (1<<28)/sampleRate in Q4: glotPhaseInc = effF0Hz * _phaseIncPerHz_q4 >> 4
     _phaseIncPerHz_q4 = (int32_t)((1LL << 28) / sampleRate);
@@ -142,20 +192,25 @@ KlattSynthesizerFP::KlattSynthesizerFP(int32_t sampleRate) {
 
     // Zero-initialise IIR coefficients.
     _f2A=_f2B=_f2C=0; _f3A=_f3B=_f3C=0;
-    _f4A=_f4B=_f4C=0; _f5cA=_f5cB=_f5cC=0;
+    _f4b0=_f4b1=_f4B=_f4C=0.0f; _f5cb0=_f5cb1=_f5cB=_f5cC=0.0f; _f6cb0=_f6cb1=_f6cB=_f6cC=0.0f;
+    _f7cb0=_f7cb1=_f7cB=_f7cC=0.0f; _f8cb0=_f8cb1=_f8cB=_f8cC=0.0f;
     _f4pA=_f4pB=_f4pC=0; _f5pA=_f5pB=_f5pC=0; _f6pA=_f6pB=_f6pC=0;
     _nzA=_nzB=_nzC=0; _npA=_npB=_npC=0;
 
-    // Cascade F1-F3 physical interpolation state: neutral (pole at origin).
+    // Cascade F1-F3 physical interpolation state: neutral (pole at origin, unity numerator).
     _f1r=0.0f; _f1cosw=1.0f; _f2r=0.0f; _f2cosw=1.0f; _f3r=0.0f; _f3cosw=1.0f;
+    _f1b0=1.0f; _f1b1=0.0f; _f2b0=1.0f; _f2b1=0.0f; _f3b0=1.0f; _f3b1=0.0f;
 
     // Zero-initialise delay taps and filter state.
     _f1D1=_f1D2=0; _f2D1=_f2D2=0; _f3D1=_f3D2=0;
-    _f4D1=_f4D2=0; _f5cD1=_f5cD2=0;
+    _f4D1=_f4D2=0; _f5cD1=_f5cD2=0; _f6cD1=_f6cD2=0;
+    _f7cD1=_f7cD2=0; _f8cD1=_f8cD2=0;
+    _f1X1=_f2X1=_f3X1=_f4X1=_f5cX1=_f6cX1=_f7cX1=_f8cX1=0.0f;
     _f2pD1=_f2pD2=0; _f3pD1=_f3pD2=0;
     _f4pD1=_f4pD2=0; _f5pD1=_f5pD2=0; _f6pD1=_f6pD2=0;
     _nzD1=_nzD2=0; _npD1=_npD2=0;
-    _sgD1=_sgD2=0; _preemphPrev=0; _tiltPrev=0;
+    _sgD1=_sgD2=0; _preemphPrev=0; _tiltPrev=0; _breathPrev = 0.0f; _breathExc = 0.0f; _breathBankN = 0;
+    for (auto& b : _breathBank) b = BreathBand{0, 0, 0, 0, 0, 0, 0};
 
     _voiceAmp_q8=_fricAmp_q8=_abAmp_q8=0;
     _pAmp2_q8=_pAmp3_q8=_pAmp4_q8=_pAmp5_q8=_pAmp6_q8=0;
@@ -164,7 +219,6 @@ KlattSynthesizerFP::KlattSynthesizerFP(int32_t sampleRate) {
     _glotPhase=_glotPhaseInc=0;
     _chorusPhase=_chorusPhaseInc=0;
     _Ne_fp = _chorusNe_fp = 655360;
-    _glotInvNe_f = _chorusInvNe_f = 1.0f / 655360.0f;
     _voiceGain_f = 0.0f;
 #ifdef SHARPVOX_SAMPLED_GLOT
     _useSampledGlot = false;
@@ -195,6 +249,11 @@ KlattSynthesizerFP::KlattSynthesizerFP(int32_t sampleRate) {
             *pq[i] = (int32_t)(p * 32768.0f);
             *gq[i] = (int32_t)(g * 32768.0f);
         }
+        // The two white passthrough terms need the same PSD compensation the
+        // poles get above: gain sqrt(fs/22050) keeps the flat tail level fixed.
+        float ws = sqrtf((float)sampleRate / 22050.0f);
+        _pnW0q15 = (int32_t)(17574.0f * ws);
+        _pnW1q15 = (int32_t)(3799.0f * ws);
     }
 
     _noiseSeed=0x12345;
@@ -225,44 +284,71 @@ void KlattSynthesizerFP::SetVoice(int16_t nGain, bool bit16,
 
     _f4cFreq = HzToPitch(f4_Freq);  _f4cBW = f4_BW;
     _f5cFreq = HzToPitch(f5_Freq);  _f5cBW = f5_BW;
+    // Fixed cascade F6: Klatt 1980 higher-pole correction (4900Hz, BW 1000, NFC=6).
+    _f6cFreq = HzToPitch(4900);  _f6cBW = 1000;
+    // Fixed cascade F7/F8: Rabiner 1968 high poles the classic 10kHz Klatt got
+    // free from phantom near-Nyquist poles, absent at 48kHz. Refills the >F6
+    // voiced envelope so vowels do not cliff above 5kHz. Nyquist-clamped below.
+    _f7cFreq = HzToPitch(6500);  _f7cBW = 720;
+    _f8cFreq = HzToPitch(7500);  _f8cBW = 1250;
     _f4pFreq = HzToPitch(f4p_Freq); _f4pBW = bw4p_BW;
     _f5pFreq = HzToPitch(f5p_Freq); _f5pBW = bw5p_BW;
     _f6pFreq = HzToPitch(f6p_Freq); _f6pBW = bw6p_BW;
     _nasalPoleFreq = HzToPitch(nasal_Base);
     _nasalPoleBW   = nasal_BW;
 
-    _noiseGain_q0 = (int32_t)(128.0f * _noiseAmp * _noiseScale);
+    // No _noiseScale here: the pink generator's pole and tail gains already
+    // hold its PSD rate-invariant, so scaling again overshot at high rates.
+    _noiseGain_q0 = (int32_t)(128.0f * _noiseAmp * KFricationGain);
 
     InitFixedFormants();
+}
+
+// White-noise RMS gain of the DC-normalized two-pole resonator, applying
+// the same near-Nyquist clamp as Calc_Pole_Coefficients. Ratio against the
+// 22050 reference holds a parallel branch's noise loudness rate-invariant.
+static float ResonatorNoiseGain(float hz, float bw, float fs) {
+    float nyq = fs * 0.5f;
+    if (hz >= nyq * 0.85f) {
+        hz = nyq * 0.80f;
+        bw = std::max(bw, 2000.0f);
+    }
+    float r  = expf(-(float)M_PI * bw / fs);
+    float w0 = 2.0f * (float)M_PI * hz / fs;
+    float B = 2.0f * r * cosf(w0), C = -r * r, A = 1.0f - B - C;
+    // Closed form for sum h[n]^2 of 1/(1 - B/z - C/z^2), times fs to turn
+    // the normalized-frequency integral into Hz (input PSD is flat in Hz).
+    return A * sqrtf(fs * (1.0f - C) / ((1.0f + C) * ((1.0f - C) * (1.0f - C) - B * B)));
 }
 
 void KlattSynthesizerFP::InitFixedFormants() {
     float A, B, C;
 
-    Calc_Pole_Coefficients(A, B, C, _f4cFreq, _f4cBW);
-    ToQ15(A, B, C, _f4A, _f4B, _f4C);
+    Calc_Matched_Pole_Coefficients(_f4b0, _f4b1, _f4B, _f4C, _f4cFreq, _f4cBW);
+    Calc_Matched_Pole_Coefficients(_f5cb0, _f5cb1, _f5cB, _f5cC, _f5cFreq, _f5cBW);
+    Calc_Matched_Pole_Coefficients(_f6cb0, _f6cb1, _f6cB, _f6cC, _f6cFreq, _f6cBW);
+    Calc_Matched_Pole_Coefficients(_f7cb0, _f7cb1, _f7cB, _f7cC, _f7cFreq, _f7cBW);
+    Calc_Matched_Pole_Coefficients(_f8cb0, _f8cb1, _f8cB, _f8cC, _f8cFreq, _f8cBW);
 
-    Calc_Pole_Coefficients(A, B, C, _f5cFreq, _f5cBW);
-    ToQ15(A, B, C, _f5cA, _f5cB, _f5cC);
-
-    float nyq = _internalRate * 0.5f;
-    auto pBankFade = [&](int16_t pitchCode) -> float {
+    // No amplitude fade near Nyquist: Calc_Pole_Coefficients clamps such
+    // poles to 0.8*nyq with widened BW (S was fully silent at 8 kHz), and
+    // peak normalization keeps each branch's loudness rate-invariant.
+    auto noiseComp = [&](int16_t pitchCode, int16_t bwv) -> float {
         float hz = (float)PitchToHz(pitchCode);
-        if (hz >= nyq * 0.85f) return 0.0f;
-        if (hz <= nyq * 0.65f) return 1.0f;
-        return (nyq * 0.85f - hz) / (nyq * 0.20f);
+        return ResonatorNoiseGain(hz, (float)bwv, 22050.0f)
+             / ResonatorNoiseGain(hz, (float)bwv, (float)_internalRate);
     };
 
     Calc_Pole_Coefficients(A, B, C, _f4pFreq, _f4pBW);
-    A *= (KNoiseGain / 8192.0f) * pBankFade(_f4pFreq);
+    A *= (KNoiseGain / 8192.0f) * noiseComp(_f4pFreq, _f4pBW);
     ToQ15(A, B, C, _f4pA, _f4pB, _f4pC);
 
     Calc_Pole_Coefficients(A, B, C, _f5pFreq, _f5pBW);
-    A *= (KNoiseGain / 8192.0f) * pBankFade(_f5pFreq);
+    A *= (KNoiseGain / 8192.0f) * noiseComp(_f5pFreq, _f5pBW);
     ToQ15(A, B, C, _f5pA, _f5pB, _f5pC);
 
     Calc_Pole_Coefficients(A, B, C, _f6pFreq, _f6pBW);
-    A *= (KNoiseGain / 8192.0f) * pBankFade(_f6pFreq);
+    A *= (KNoiseGain / 8192.0f) * noiseComp(_f6pFreq, _f6pBW);
     ToQ15(A, B, C, _f6pA, _f6pB, _f6pC);
 
     Calc_Pole_Coefficients(A, B, C, _nasalPoleFreq, _nasalPoleBW);
@@ -275,8 +361,6 @@ void KlattSynthesizerFP::ComputeGlotWave(int16_t vGain) {
 
     _Ne_fp       = std::max((int32_t)655360,  std::min((int32_t)16056320, (int32_t)roundf(Oq       * 16777216.0f)));
     _chorusNe_fp = std::max((int32_t)655360,  std::min((int32_t)16056320, (int32_t)roundf(chorusOq * 16777216.0f)));
-    _glotInvNe_f   = 1.0f / (float)_Ne_fp;
-    _chorusInvNe_f = 1.0f / (float)_chorusNe_fp;
     _voiceGain_f   = (vGain > 0) ? (vGain * 1140.0f) : 0.0f;
 }
 
@@ -346,8 +430,8 @@ int32_t KlattSynthesizerFP::NextPinkNoise_q15() {
     _pink4 = (int32_t)(((int64_t)_pnP4q15  * _pink4 + (int64_t)_pnG4q15 * w) >> 15);
     _pink5 = (int32_t)((-(int64_t)_pnP5mq15 * _pink5 - (int64_t)_pnG5q15 * w) >> 15);
     int32_t sum = _pink0 + _pink1 + _pink2 + _pink3 + _pink4 + _pink5
-                + _pink6 + (int32_t)(((int64_t)17574 * w) >> 15);
-    _pink6 = (int32_t)(((int64_t)3799 * w) >> 15);
+                + _pink6 + (int32_t)(((int64_t)_pnW0q15 * w) >> 15);
+    _pink6 = (int32_t)(((int64_t)_pnW1q15 * w) >> 15);
 
     return (int32_t)(((int64_t)5898 * sum) >> 15);
 }
@@ -373,6 +457,53 @@ void KlattSynthesizerFP::Calc_Pole_Coefficients(float& Acoeff, float& Bcoeff, fl
     Ccoeff = -(r * r);
     Bcoeff = 2.0f * r * cosf(w);
     Acoeff = 1.0f - Bcoeff - Ccoeff;
+}
+
+// Matched one-zero resonator (Vicanek 2016, "Matched Second Order Digital
+// Filters", sec 4.1): same impulse-invariant poles as Calc_Pole_Coefficients,
+// but numerator b0+b1*z^-1 fitted so |H| matches the analog resonance
+// prototype H(s)=w0^2/(w0^2+s*w0/Q+s^2) with f0=sqrt(F^2+(BW/2)^2), Q=f0/BW.
+void KlattSynthesizerFP::Calc_Matched_Pole_Coefficients(float& b0, float& b1,
+                                                          float& Bcoeff, float& Ccoeff,
+                                                          int16_t pitch, int16_t bandWidth,
+                                                          int32_t voiceMinBW) {
+    if (bandWidth > KMaxBandWidth) bandWidth = (int16_t)KMaxBandWidth;
+    if (bandWidth < voiceMinBW)    bandWidth = (int16_t)voiceMinBW;
+    if (pitch < 256)               pitch = 256;
+
+    double hz = (double)PitchToHz(pitch);
+    double nyquist = _internalRate * 0.5;
+    if (hz >= nyquist * 0.85) {
+        hz = nyquist * 0.80;
+        bandWidth = std::max(bandWidth, (int16_t)2000);
+    }
+    double bw = bandWidth, fs = _internalRate;
+    // Poles: identical values to Calc_Pole_Coefficients (Klatt sign convention).
+    double a1 = -2.0 * std::exp(-M_PI * bw / fs) * std::cos(2.0 * M_PI * hz / fs);
+    double a2 = std::exp(-2.0 * M_PI * bw / fs);
+    Bcoeff = (float)(-a1);
+    Ccoeff = (float)(-a2);
+
+    double f0 = std::sqrt(hz * hz + 0.25 * bw * bw);
+    double Q  = f0 / bw;
+    double w0 = 2.0 * M_PI * f0 / fs;
+    // Vicanek eq. 26-27, 31-34. Double precision required for the B1 cancellation.
+    double p1 = std::sin(0.5 * w0); p1 *= p1;
+    double p0 = 1.0 - p1;
+    double A0 = 1.0 + a1 + a2; A0 *= A0;
+    double A1 = 1.0 - a1 + a2; A1 *= A1;
+    double A2 = -4.0 * a2;
+    double R1 = (A0 * p0 + A1 * p1 + A2 * 4.0 * p0 * p1) * Q * Q;
+    double B1 = (R1 - A0 * p0) / p1;
+    double sB0 = 1.0 + a1 + a2;
+    if (B1 <= 0.0) {
+        // Degenerate fit: fall back to the all-pole unity-DC numerator.
+        b0 = (float)sB0;
+        b1 = 0.0f;
+        return;
+    }
+    b0 = (float)(0.5 * (sB0 + std::sqrt(B1)));
+    b1 = (float)(sB0 - b0);
 }
 
 void KlattSynthesizerFP::Calc_Zero_Coefficients(float& Acoeff, float& Bcoeff, float& Ccoeff,
@@ -411,17 +542,19 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
         _sgPhase=0.0f;
 #endif
         _sgD1=_sgD2=0;
-        _f1D1=_f1D2=_f2D1=_f2D2=_f3D1=_f3D2=_f4D1=_f4D2=_f5cD1=_f5cD2=0;
+        _f1D1=_f1D2=_f2D1=_f2D2=_f3D1=_f3D2=_f4D1=_f4D2=_f5cD1=_f5cD2=_f6cD1=_f6cD2=0;
+        _f7cD1=_f7cD2=_f8cD1=_f8cD2=0;
+        _f1X1=_f2X1=_f3X1=_f4X1=_f5cX1=_f6cX1=_f7cX1=_f8cX1=0.0f;
         _npD1=_npD2=_nzD1=_nzD2=0;
         _preemphPrev=0; _tiltPrev=0;
 
         float A,B,C;
-        Calc_Pole_Coefficients(A,B,C, AdjFormant((int16_t)(frame.F1+_f1FreqOffset),1), frame.Bw1);
+        Calc_Matched_Pole_Coefficients(_f1b0,_f1b1,B,C, AdjFormant((int16_t)(frame.F1+_f1FreqOffset),1), frame.Bw1);
         _f1r = sqrtf(-C); _f1cosw = (_f1r > 0.0f) ? B / (2.0f * _f1r) : 1.0f;
-        Calc_Pole_Coefficients(A,B,C, AdjFormant((int16_t)(frame.F2+_f2FreqOffset),2), frame.Bw2);
+        Calc_Matched_Pole_Coefficients(_f2b0,_f2b1,B,C, AdjFormant((int16_t)(frame.F2+_f2FreqOffset),2), frame.Bw2);
         _f2r = sqrtf(-C); _f2cosw = (_f2r > 0.0f) ? B / (2.0f * _f2r) : 1.0f;
         _f2B = (int32_t)(2.0f*_f2r*_f2cosw*32768.0f); _f2C = -(int32_t)(_f2r*_f2r*32768.0f); _f2A = 32768-_f2B-_f2C;
-        Calc_Pole_Coefficients(A,B,C, AdjFormant((int16_t)(frame.F3+_f3FreqOffset),3), frame.Bw3);
+        Calc_Matched_Pole_Coefficients(_f3b0,_f3b1,B,C, AdjFormant((int16_t)(frame.F3+_f3FreqOffset),3), frame.Bw3);
         _f3r = sqrtf(-C); _f3cosw = (_f3r > 0.0f) ? B / (2.0f * _f3r) : 1.0f;
         _f3B = (int32_t)(2.0f*_f3r*_f3cosw*32768.0f); _f3C = -(int32_t)(_f3r*_f3r*32768.0f); _f3A = 32768-_f3B-_f3C;
 
@@ -440,11 +573,11 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
         _pAmp5_q8=tPAmp5; _pAmp6_q8=tPAmp6;
     }
 
-    //  Target (r, cos) for variable cascade formants 
-    float f1TA,f1TB,f1TC, f2TA,f2TB,f2TC, f3TA,f3TB,f3TC;
-    Calc_Pole_Coefficients(f1TA,f1TB,f1TC, AdjFormant((int16_t)(frame.F1+_f1FreqOffset),1), frame.Bw1);
-    Calc_Pole_Coefficients(f2TA,f2TB,f2TC, AdjFormant((int16_t)(frame.F2+_f2FreqOffset),2), frame.Bw2);
-    Calc_Pole_Coefficients(f3TA,f3TB,f3TC, AdjFormant((int16_t)(frame.F3+_f3FreqOffset),3), frame.Bw3);
+    //  Target (r, cos) and matched numerator for variable cascade formants
+    float f1T_b0,f1T_b1,f1TB,f1TC, f2T_b0,f2T_b1,f2TB,f2TC, f3T_b0,f3T_b1,f3TB,f3TC;
+    Calc_Matched_Pole_Coefficients(f1T_b0,f1T_b1,f1TB,f1TC, AdjFormant((int16_t)(frame.F1+_f1FreqOffset),1), frame.Bw1);
+    Calc_Matched_Pole_Coefficients(f2T_b0,f2T_b1,f2TB,f2TC, AdjFormant((int16_t)(frame.F2+_f2FreqOffset),2), frame.Bw2);
+    Calc_Matched_Pole_Coefficients(f3T_b0,f3T_b1,f3TB,f3TC, AdjFormant((int16_t)(frame.F3+_f3FreqOffset),3), frame.Bw3);
 
     float f1T_r = sqrtf(-f1TC), f1T_cw = f1T_r > 0.0f ? f1TB/(2.0f*f1T_r) : 1.0f;
     float f2T_r = sqrtf(-f2TC), f2T_cw = f2T_r > 0.0f ? f2TB/(2.0f*f2T_r) : 1.0f;
@@ -474,6 +607,9 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
     float df1r =(f1T_r -_f1r) /SampFrameLen, df1cw=(f1T_cw-_f1cosw)/SampFrameLen;
     float df2r =(f2T_r -_f2r) /SampFrameLen, df2cw=(f2T_cw-_f2cosw)/SampFrameLen;
     float df3r =(f3T_r -_f3r) /SampFrameLen, df3cw=(f3T_cw-_f3cosw)/SampFrameLen;
+    float df1b0=(f1T_b0-_f1b0)/SampFrameLen, df1b1=(f1T_b1-_f1b1)/SampFrameLen;
+    float df2b0=(f2T_b0-_f2b0)/SampFrameLen, df2b1=(f2T_b1-_f2b1)/SampFrameLen;
+    float df3b0=(f3T_b0-_f3b0)/SampFrameLen, df3b1=(f3T_b1-_f3b1)/SampFrameLen;
     int32_t dNzA=(nzTA_q-_nzA)/SampFrameLen, dNzB=(nzTB_q-_nzB)/SampFrameLen, dNzC=(nzTC_q-_nzC)/SampFrameLen;
     int32_t dNasalNorm=(tNasalNorm_q15-_nasalNorm_q15)/SampFrameLen;
 
@@ -505,7 +641,41 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
     frameTiltBias = std::max(-0.95f, std::min(0.95f, frameTiltBias));
     int32_t frameTiltBias_q15 = (int32_t)(frameTiltBias * 32768.0f);
 
+    // F0-dependent voicing gain compensation: cascade output climbs with F0,
+    // so attenuate voiced excitation above a reference pitch to avoid clipping.
+    float voiceF0Comp = 1.0f;
+    {
+        float f0Hz = (float)PitchToHz(frame.F0) + PitchOffsetHz;
+        const float kF0CompRef   = 220.0f;  // pitch at/below which gain is unchanged
+        const float kF0CompExp   = 0.85f;   // attenuation slope in log-pitch
+        const float kF0CompFloor = 0.40f;   // strongest attenuation allowed
+        if (f0Hz > kF0CompRef) {
+            voiceF0Comp = std::pow(kF0CompRef / f0Hz, kF0CompExp);
+            if (voiceF0Comp < kF0CompFloor) voiceF0Comp = kF0CompFloor;
+        }
+    }
+
     float breathGainBase = _breathGain / 8192.0f;
+
+    // breath high bank, retune to this frame's formants
+    _breathBankN = 0;
+    if (BreathAmt > 0) {
+        const float fs = (float)_sampleRate;
+        const float fz[5] = { (float)PitchToHz(AdjFormant((int16_t)(frame.F1 + _f1FreqOffset), 1)),
+                              (float)PitchToHz(AdjFormant((int16_t)(frame.F2 + _f2FreqOffset), 2)),
+                              (float)PitchToHz(AdjFormant((int16_t)(frame.F3 + _f3FreqOffset), 3)),
+                              (float)PitchToHz(_f4cFreq), (float)PitchToHz(_f5cFreq) };
+        const float bz[5] = { (float)frame.Bw1, (float)frame.Bw2, (float)frame.Bw3, (float)_f4cBW, (float)_f5cBW };
+        float gain = kBreathHighGain;
+        for (int k = 0; k < 5; ++k, gain *= kBreathHighDecay) {
+            float f = fz[k] + kBreathHighShift;
+            if (f >= 0.45f * fs) continue;   // band would sit at/above Nyquist
+            float bw = std::max(kBreathHighBwMin, bz[k] * kBreathHighBwMul);
+            float w = 2.0f * (float)M_PI * f / fs, al = std::sin(w) * bw / (2.0f * f), a0 = 1.0f + al;
+            BreathBand& h = _breathBank[_breathBankN++];
+            h.b0 = al / a0; h.b2 = -al / a0; h.a1 = -2.0f * std::cos(w) / a0; h.a2 = (1.0f - al) / a0; h.gain = gain;
+        }
+    }
 
     //  Per-sample loop 
     for (int32_t sampCtr = SampFrameLen - 1; sampCtr >= 0; --sampCtr) {
@@ -517,6 +687,10 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
         _f1r += df1r; _f1cosw += df1cw;
         _f2r += df2r; _f2cosw += df2cw;
         _f3r += df3r; _f3cosw += df3cw;
+        // Step matched numerators; b0>|b1| region is convex so interpolants stay minimum-phase.
+        _f1b0 += df1b0; _f1b1 += df1b1;
+        _f2b0 += df2b0; _f2b1 += df2b1;
+        _f3b0 += df3b0; _f3b1 += df3b1;
         // Derive float B/C for cascade; derive Q15 for F2/F3 parallel bank.
         float f1Bf = 2.0f*_f1r*_f1cosw, f1Cf = -_f1r*_f1r;
         float f2Bf = 2.0f*_f2r*_f2cosw, f2Cf = -_f2r*_f2r;
@@ -598,7 +772,6 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
 
                 float fryFactor = (FryAmount > 0) ? std::max(0.05f, 1.0f - FryAmount * 0.003f) : 1.0f;
                 int32_t effNe = (int32_t)(_Ne_fp * fryFactor);
-                float effInvNe = (effNe > 0) ? (1.0f / (float)effNe) : _glotInvNe_f;
 
 #ifdef SHARPVOX_SAMPLED_GLOT
                 if (_useSampledGlot && _sgBufSize > 0) {
@@ -613,8 +786,7 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
 #endif
                 {
                     int32_t phi = (int32_t)_glotPhase;
-                    float tau = (float)phi * effInvNe;
-                    glotSample = (phi < effNe) ? (GlotPulse(tau) * _voiceGain_f) : 0.0f;
+                    glotSample = GlotPulseBL(phi, effNe, _glotPhaseInc) * _voiceGain_f;
                 }
 #ifdef SHARPVOX_SAMPLED_GLOT
                 if (VoiceChorus != 0 && !_useSampledGlot) {
@@ -623,10 +795,8 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
 #endif
                     _chorusPhase = (_chorusPhaseInc+_chorusPhase) & 0xFFFFFF;
                     int32_t phi2 = (int32_t)_chorusPhase;
-                    float tau2 = (float)phi2 * _chorusInvNe_f;
-                    float chorus = (phi2 < _chorusNe_fp)
-                        ? (GlotPulse(tau2) * _voiceGain_f)
-                        : 0.0f;
+                    float chorus = GlotPulseBL(phi2, _chorusNe_fp, _chorusPhaseInc)
+                                   * _voiceGain_f;
                     glotSample = (glotSample + chorus) * 0.5f;
                 }
 
@@ -637,23 +807,24 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
 #endif
                     _diploPhase = (_diploPhase + (_glotPhaseInc >> 1)) & 0xFFFFFF;
                     int32_t phiD = _diploPhase;
-                    if (phiD < effNe) {
-                        float tauD = (float)phiD * effInvNe;
-                        glotSample += GlotPulse(tauD) * _voiceGain_f * (Diplophonia * 0.007f);
-                    }
+                    glotSample += GlotPulseBL(phiD, effNe, _glotPhaseInc >> 1)
+                                  * _voiceGain_f * (Diplophonia * 0.007f);
                 }
 
-                // Spectral tilt: 1-pole IIR lowpass y[n] = (1-d)*x[n] + d*y[n-1].
-                // Matches float variant. Clamp d to 0.95 (= 31130 Q15).
+                // 1-pole lowpass with corner held at the 22050 anchor
+                // (d = 1 - (1-dBase)*22050/fs), so timbre is rate-invariant.
                 int32_t eTilt = _tilt_q15 + frameTiltBias_q15;
                 if (eTilt >  31130) eTilt =  31130;
                 if (eTilt <      0) eTilt =      0;
-                float d = (float)eTilt * (1.0f / 32768.0f);
+                float dBase = (float)eTilt * (1.0f / 32768.0f);
+                float d = 1.0f - (1.0f - dBase) * ((float)KDefaultSampleRate / (float)_sampleRate);
+                if (d < 0.0f)   d = 0.0f;
+                if (d > 0.995f) d = 0.995f;
                 float tiltedSample = (1.0f - d) * glotSample + d * _tiltPrev;
                 _tiltPrev = tiltedSample;
 
                 cascadeInF = tiltedSample * (float)voiceAmpTrem_q8
-                             * (_shimmerScale / (256.0f * 8192.0f));
+                             * (_shimmerScale / (256.0f * 8192.0f)) * voiceF0Comp;
 
                 // Subglottal resonance (~350 Hz chest-cavity coupling).
                 if (SubglottalAmt > 0) {
@@ -664,9 +835,12 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
                 // Cycle-synchronous breathiness.
                 if (BreathAmt > 0) {
                     float openness = std::max(0.0f, glotSample);
-                    cascadeInF += (float)(NextNoise()-128) * openness
-                                  * (voiceAmpTrem_q8/256.0f) * (BreathAmt * 0.00004f)
-                                  * _noiseScale / 8192.0f;
+                    float n = (float)(NextNoise()-128);
+                    float tilted = n - kBreathTilt * _breathPrev;
+                    _breathPrev = n;
+                    _breathExc = tilted * openness * (voiceAmpTrem_q8/256.0f) * (BreathAmt * 0.00004f)
+                                 * _noiseScale / 8192.0f;
+                    cascadeInF += _breathExc;
                 }
             } else {
                 if (_breathGain > 0)
@@ -702,14 +876,34 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
                 // Nasal resonator (NP).
                 cascadeOutF = fp_iir_f(32768, _npB, _npC, cascadeOutF, _npD1, _npD2);
 
-                // Cascade F1F5.  F1-F3: all-float coefficients from (r,cos)  no Q15 rounding.
-                cascadeOutF = fp_iir_ff(1.0f-f1Bf-f1Cf, f1Bf, f1Cf, cascadeOutF, _f1D1, _f1D2);
-                cascadeOutF = fp_iir_ff(1.0f-f2Bf-f2Cf, f2Bf, f2Cf, cascadeOutF, _f2D1, _f2D2);
-                cascadeOutF = fp_iir_ff(1.0f-f3Bf-f3Cf, f3Bf, f3Cf, cascadeOutF, _f3D1, _f3D2);
-                cascadeOutF = fp_iir_f(_f4A, _f4B, _f4C, cascadeOutF, _f4D1, _f4D2);
-                cascadeOutF = fp_iir_f(_f5cA, _f5cB, _f5cC, cascadeOutF, _f5cD1, _f5cD2);
+                // Cascade F1F5: matched one-zero resonators (Vicanek 2016), all-float.
+                cascadeOutF = fp_iir_zff(_f1b0, _f1b1, f1Bf, f1Cf, cascadeOutF, _f1X1, _f1D1, _f1D2);
+                cascadeOutF = fp_iir_zff(_f2b0, _f2b1, f2Bf, f2Cf, cascadeOutF, _f2X1, _f2D1, _f2D2);
+                cascadeOutF = fp_iir_zff(_f3b0, _f3b1, f3Bf, f3Cf, cascadeOutF, _f3X1, _f3D1, _f3D2);
+                cascadeOutF = fp_iir_zff(_f4b0, _f4b1, _f4B, _f4C, cascadeOutF, _f4X1, _f4D1, _f4D2);
+                cascadeOutF = fp_iir_zff(_f5cb0, _f5cb1, _f5cB, _f5cC, cascadeOutF, _f5cX1, _f5cD1, _f5cD2);
+                // Fixed cascade F6 higher-pole correction (Klatt 1980, 4900Hz/BW1000).
+                cascadeOutF = fp_iir_zff(_f6cb0, _f6cb1, _f6cB, _f6cC, cascadeOutF, _f6cX1, _f6cD1, _f6cD2);
+                // F7/F8 refill the >5kHz voiced envelope (Rabiner 1968 high poles).
+                cascadeOutF = fp_iir_zff(_f7cb0, _f7cb1, _f7cB, _f7cC, cascadeOutF, _f7cX1, _f7cD1, _f7cD2);
+                cascadeOutF = fp_iir_zff(_f8cb0, _f8cb1, _f8cB, _f8cC, cascadeOutF, _f8cX1, _f8cD1, _f8cD2);
             }
-            cascadeOut = (int32_t)cascadeOutF;
+            // Q6 conversion: truncating to Q0 here left a ~36 LSB output step
+            // (OutputGain*4) heard as broadband hiss behind voiced speech.
+            // breath high bank, in parallel with the cascade.
+            if (_breathBankN > 0) {
+                float hb = 0.0f;
+                for (int32_t k = 0; k < _breathBankN; ++k) {
+                    BreathBand& h = _breathBank[k];
+                    float y = h.b0 * _breathExc + h.z1;
+                    h.z1 = -h.a1 * y + h.z2;
+                    h.z2 = h.b2 * _breathExc - h.a2 * y;
+                    hb += y * h.gain;
+                }
+                cascadeOutF += hb;
+            }
+            _breathExc = 0.0f;
+            cascadeOut = (int32_t)(cascadeOutF * 64.0f);
 
             // Parallel bank noise. pink_fp / pink_float  32768 = 2^15 (from Q15 filter states),
             // so >>15 yields Q0 (float-scale), matching cascadeOut above.
@@ -746,27 +940,25 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
                 samp6 = fp_iir(32768, _f6pB, _f6pC, in6, _f6pD1, _f6pD2);
             }
 
-            int32_t sample = cascadeOut + (sampAB - samp3 + samp4 - samp5 + samp6 - samp2);
+            int32_t sample = cascadeOut + ((sampAB - samp3 + samp4 - samp5 + samp6 - samp2) << 6);
 
             // Pre-emphasis: y = x - a*x[n-1], a in Q15 (rate-compensated, see ctor)
             if (_hfEmph) {
                 int32_t pe = sample - (int32_t)(((int64_t)_preemphA_q15 * _preemphPrev) >> 15);
                 _preemphPrev = sample;
-                sample = pe;
+                sample = (int32_t)(((int64_t)pe * _preemphScale_q12) >> 12);
             }
 
-            // Output gain (Q15), clip 8191, 4 to reach int16_t range.
-            // sample is Q0 (cascade >>8 + parallel Q0); _outputGain_q15 = OutputGain*32768; >>15 = Q0 out.
-            int32_t out = (int32_t)(((int64_t)sample * _outputGain_q15) >> 15);
-            if (out >  8191) out =  8191;
-            if (out < -8191) out = -8191;
-            out *= 4;
+            // Output gain on Q6 sample: product is Q21, rounded >>19 lands at
+            // the old x4 output scale but with 1 LSB steps instead of 4.
+            int32_t out = (int32_t)(((int64_t)sample * _outputGain_q15 + (1 << 18)) >> 19);
             if (out >  INT16_MAX) out =  INT16_MAX;
             if (out < -INT16_MAX) out = -INT16_MAX;
             outputBuffer[offset++] = (int16_t)out;
 
         } else {
             _glotPhase=0; _chorusPhase=0;
+            _preemphPrev = 0;
             outputBuffer[offset++] = 0;
         }
     }
@@ -791,6 +983,9 @@ void KlattSynthesizerFP::SynthesizeFrame(Frame frame, int16_t* outputBuffer, int
     _f1r = f1T_r; _f1cosw = f1T_cw;
     _f2r = f2T_r; _f2cosw = f2T_cw;
     _f3r = f3T_r; _f3cosw = f3T_cw;
+    _f1b0 = f1T_b0; _f1b1 = f1T_b1;
+    _f2b0 = f2T_b0; _f2b1 = f2T_b1;
+    _f3b0 = f3T_b0; _f3b1 = f3T_b1;
     // Keep F2/F3 Q15 in sync with snapped r/cos.
     _f2B=(int32_t)(2.0f*_f2r*_f2cosw*32768.0f); _f2C=-(int32_t)(_f2r*_f2r*32768.0f); _f2A=32768-_f2B-_f2C;
     _f3B=(int32_t)(2.0f*_f3r*_f3cosw*32768.0f); _f3C=-(int32_t)(_f3r*_f3r*32768.0f); _f3A=32768-_f3B-_f3C;

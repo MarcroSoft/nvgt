@@ -7,6 +7,7 @@
 #include "../include/LibraryData.h"
 #include "../include/TextCommands.h"
 #include "../include/JapaneseParser.h"
+#include "../include/MeCabReader.h"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
@@ -31,6 +32,8 @@ namespace SharpVox {
 
     // Forced clause-split threshold for unpunctuated run-ons (see TextToSentenceTokens).
     static const int32_t kMaxClauseWords = 96;
+
+    static const char kSubwordJoin = '\x01';
 
     // Subject pronouns: receive kPronounWord on every phoneme so the backend can
     // apply vocal-confidence emphasis (pitch accent + vowel lengthening).
@@ -70,6 +73,52 @@ namespace SharpVox {
         for (const char* s : FunctionWordsTableArr)
             if (w == s) return true;
         return false;
+    }
+
+    // content words that readers usually leave unaccented or accent weakly light verbs quantifiers and degree adverbs
+    static const char* const LightContentWordsTableArr[] = {
+        // light verbs
+        "go", "goes", "went", "gone", "going",
+        "get", "gets", "got", "getting", "gotten",
+        "make", "makes", "made", "making",
+        "take", "takes", "took", "taken", "taking",
+        "come", "comes", "came", "coming",
+        "give", "gives", "gave", "given",
+        "put", "puts", "keep", "keeps", "kept", "let", "lets",
+        // quantifiers / degree and focus adverbs
+        "all", "only", "just", "also", "even", "very", "really", "quite",
+        "rather", "almost", "enough", "still", "much", "many", "more",
+        "most", "some", "any", "each", "every", "both", "such", "own",
+        "this", "these", "those",
+    };
+
+    static bool IsLightContentWord(const std::string& w) {
+        for (const char* s : LightContentWordsTableArr)
+            if (w == s) return true;
+        return false;
+    }
+
+    // words after which have/has/had is a main verb rather than an auxiliary
+    static const char* const MainVerbHaveCueArr[] = {
+        "A", "AN", "THE", "MY", "YOUR", "HIS", "HER", "ITS", "OUR", "THEIR",
+        "THIS", "THAT", "THESE", "THOSE", "SOME", "ANY", "NO", "MANY",
+        "MUCH", "ENOUGH", "LOTS", "TO",
+    };
+
+    // content/function/light classification for one word of a span
+    static void ClassifyWord(const std::vector<std::string>& ctxWords, int32_t idx,
+                             const std::string& wordLower, bool& isContent, bool& isLight) {
+        isContent = !IsFunctionWord(wordLower);
+        isLight = isContent && IsLightContentWord(wordLower);
+        if (!isContent && (wordLower == "have" || wordLower == "has" || wordLower == "had")
+            && idx + 1 < (int32_t)ctxWords.size()) {
+            for (const char* cue : MainVerbHaveCueArr) {
+                if (ctxWords[idx + 1] == cue) {
+                    isContent = true;
+                    break;
+                }
+            }
+        }
     }
 
     static bool IsPronounWord(const std::string& w) {
@@ -753,10 +802,9 @@ namespace SharpVox {
         for (size_t i = 0; i < text.size(); i++) {
             char c = text[i];
             if (i > 0 && std::isupper((unsigned char)c)) {
-                char prev = text[i - 1];
                 bool nextLower = (i + 1 < text.size()) && std::islower((unsigned char)text[i + 1]);
-                if (std::islower((unsigned char)prev) || (std::isupper((unsigned char)prev) && nextLower)) {
-                    result += ' ';
+                if (nextLower) {
+                    result += kSubwordJoin;
                 }
             }
             result += c;
@@ -1062,7 +1110,7 @@ namespace SharpVox {
                     if (s.compare(i, k, s, i + r * k, k) != 0) match = false;
                 if (!match) continue;
                 for (size_t r = 0; r < reps; ++r) {
-                    if (r > 0) out += ' ';
+                    if (r > 0) out += kSubwordJoin;
                     out.append(s, i, k);
                 }
                 i = wEnd;
@@ -1076,7 +1124,11 @@ namespace SharpVox {
 
     // Tokenizer  replaces the three identical static std::regex TokenRe objects.
     // Mirrors: (\d+)|([a-zA-Z]+(?:'[a-zA-Z]+)*)|([,;:])|(\.\.\.|\.| !|\?|~)|(\s+)
-    enum class TokKind : uint8_t { Digits, Word, ClausePunct, SentPunct, Space, Hiragana };
+    enum class TokKind : uint8_t { Digits, Word, ClausePunct, SentPunct, Space, Hiragana
+#ifdef HAVE_MECAB
+        , Kanji
+#endif
+    };
     struct Token { TokKind kind; uint32_t pos; uint32_t len; };
 
     static std::vector<Token> TokenizeText(const std::string& s) {
@@ -1087,9 +1139,9 @@ namespace SharpVox {
                 size_t start = i;
                 while (i < n && std::isdigit((unsigned char)s[i])) ++i;
                 out.push_back({TokKind::Digits, (uint32_t)start, (uint32_t)(i - start)});
-            } else if (std::isalpha(c)) {
+            } else if (std::isalpha(c) || c == kSubwordJoin) {
                 size_t start = i;
-                while (i < n && std::isalpha((unsigned char)s[i])) ++i;
+                while (i < n && (std::isalpha((unsigned char)s[i]) || s[i] == kSubwordJoin)) ++i;
                 while (i < n && s[i] == '\'' &&
                        i + 1 < n && std::isalpha((unsigned char)s[i + 1])) {
                     ++i;
@@ -1115,15 +1167,53 @@ namespace SharpVox {
                 size_t start = i;
                 while (i < n && std::isspace((unsigned char)s[i])) ++i;
                 out.push_back({TokKind::Space, (uint32_t)start, (uint32_t)(i - start)});
-            } else if (c == 0xE3 && i + 2 < n) {
+            } else if ((c == 0xE3 || c == 0xE4 || c == 0xE5 ||
+                        c == 0xE6 || c == 0xE7 || c == 0xE8 ||
+                        c == 0xE9 || c == 0xF0) && i + 2 < n) {
                 uint8_t b1 = (unsigned char)s[i+1];
                 uint8_t b2 = (unsigned char)s[i+2];
+#ifdef HAVE_MECAB
+                // CJK Unified Ideographs U+4E00-U+9FFF (E4-E9 xx xx)
+                auto isCJK = [](uint8_t t0, uint8_t) -> bool {
+                    return t0 >= 0xE4 && t0 <= 0xE9;
+                };
+                // Supplementary CJK U+3400-U+4DBF (E3 84-85 xx) and U+F900-U+FAFF (EF A6-AB xx)
+                auto isSupCJK = [](uint8_t t0, uint8_t t1, uint8_t) -> bool {
+                    if (t0 == 0xE3 && t1 >= 0x84 && t1 <= 0x85) return true;
+                    if (t0 == 0xEF && t1 >= 0xA6 && t1 <= 0xAB) return true;
+                    return false;
+                };
+#endif
                 if (b1 == 0x80 && b2 == 0x82) {       // U+3002 = 。
                     out.push_back({TokKind::SentPunct, (uint32_t)i, 3});
                     i += 3;
                 } else if (b1 == 0x80 && b2 == 0x81) { // U+3001 = 、
                     out.push_back({TokKind::ClausePunct, (uint32_t)i, 3});
                     i += 3;
+                } else if (b1 == 0x83 && b2 == 0xBB) { // U+30FB = ・
+                    out.push_back({TokKind::ClausePunct, (uint32_t)i, 3});
+                    i += 3;
+#ifdef HAVE_MECAB
+                } else if (isCJK(c, b1) || isSupCJK(c, b1, b2)) {
+                    // scan through contiguous Japanese characters (CJK, hiragana, katakana, LV mark)
+                    // as one token, reading provider matches compound words across types
+                    size_t start = i;
+                    while (i + 2 < n) {
+                        uint8_t t0 = (unsigned char)s[i];
+                        uint8_t t1 = (unsigned char)s[i+1];
+                        uint8_t t2 = (unsigned char)s[i+2];
+                        bool jJapanese = (t0 == 0xE3);
+                        bool jCJK      = isCJK(t0, t1);
+                        bool jSupCJK   = isSupCJK(t0, t1, t2);
+                        bool jLVMark   = (t0 == 0xE3 && t1 == 0x83 && t2 == 0xBC);
+                        if (jJapanese || jCJK || jSupCJK || jLVMark) {
+                            i += 3;
+                        } else {
+                            break;
+                        }
+                    }
+                    out.push_back({TokKind::Kanji, (uint32_t)start, (uint32_t)(i - start)});
+#endif
                 } else {
                     // Hiragana U+3040-U+309F or katakana U+30A0-U+30F6 or long vowel mark U+30FC
                     auto isHira = [](uint8_t t0, uint8_t t1, uint8_t t2) -> bool {
@@ -1341,13 +1431,23 @@ namespace SharpVox {
                 }
                 std::string wordLower = word;
                 for (char& c : wordLower) { c = (char)std::tolower((unsigned char)c); }
-                AppendWordTokens(tokens, stream,
-                    !IsFunctionWord(wordLower),
-                    IsPronounWord(wordLower));
+                bool isContent, isLight;
+                ClassifyWord(ctxWords, wordIdx, wordLower, isContent, isLight);
+                AppendWordTokens(tokens, stream, isContent,
+                    IsPronounWord(wordLower), isLight);
                 wordIdx++;
             } else if (t.kind == TokKind::Hiragana) {
                 auto jptoks = JapaneseParser::SpanToPhonemes(normalized, t.pos, t.len);
                 tokens.insert(tokens.end(), jptoks.begin(), jptoks.end());
+#ifdef HAVE_MECAB
+            } else if (t.kind == TokKind::Kanji) {
+                std::string span = normalized.substr(t.pos, t.len);
+                std::string readings = MeCabReader::ExtractReadings(span);
+                if (!readings.empty()) {
+                    auto jptoks = JapaneseParser::SpanToPhonemes(readings, 0, readings.size());
+                    tokens.insert(tokens.end(), jptoks.begin(), jptoks.end());
+                }
+#endif
             } else if (t.kind == TokKind::ClausePunct) {
                 PhonemeToken tok;
                 tok.Phon = _SIL_;
@@ -1403,7 +1503,8 @@ namespace SharpVox {
                     std::string word = normalized.substr(t.pos, t.len);
                     std::string wordLower = word;
                     for (char& c : wordLower) { c = (char)std::tolower((unsigned char)c); }
-                    bool isContent = !IsFunctionWord(wordLower);
+                    bool isContent, isLight;
+                    ClassifyWord(ctxWords, wordIdx, wordLower, isContent, isLight);
                     auto stream = HeteronymResolver::Resolve(ctxWords, wordIdx);
                     if (stream.empty()) {
                         std::string upper = word;
@@ -1411,11 +1512,20 @@ namespace SharpVox {
                         stream = WordToPhonStream(upper);
                     }
                     AppendWordTokens(tokens, stream, isContent,
-                        IsPronounWord(wordLower));
+                        IsPronounWord(wordLower), isLight);
                     wordIdx++;
                 } else if (t.kind == TokKind::Hiragana) {
                     auto jptoks = JapaneseParser::SpanToPhonemes(normalized, t.pos, t.len);
                     tokens.insert(tokens.end(), jptoks.begin(), jptoks.end());
+#ifdef HAVE_MECAB
+                } else if (t.kind == TokKind::Kanji) {
+                    std::string span = normalized.substr(t.pos, t.len);
+                    std::string readings = MeCabReader::ExtractReadings(span);
+                    if (!readings.empty()) {
+                        auto jptoks = JapaneseParser::SpanToPhonemes(readings, 0, readings.size());
+                        tokens.insert(tokens.end(), jptoks.begin(), jptoks.end());
+                    }
+#endif
                 } else if (t.kind == TokKind::ClausePunct) {
                     PhonemeToken tok;
                     tok.Phon = _SIL_;
@@ -1436,11 +1546,15 @@ namespace SharpVox {
     std::vector<uint8_t> Phonemizer::SpellOutAcronym(const std::string& upper) {
         std::vector<uint8_t> buf;
         buf.reserve(upper.size() * 4);
+        bool firstLetter = true;
         for (char c : upper) {
             if (c < 'A' || c > 'Z') {
                 continue;
             }
-            buf.push_back(OP_WORD);
+            if (firstLetter) {
+                buf.push_back(OP_WORD);
+                firstLetter = false;
+            }
             const auto& entry = LetterPhonemesTable[c - 'A'];
             for (size_t k = 0; k < entry.len; k++) {
                 buf.push_back(entry.data[k]);
@@ -1462,6 +1576,24 @@ namespace SharpVox {
     }
 
     std::vector<uint8_t> Phonemizer::WordToPhonStream(const std::string& upperWord) {
+        if (upperWord.find(kSubwordJoin) != std::string::npos) {
+            std::vector<uint8_t> out;
+            size_t p = 0;
+            bool firstPiece = true;
+            while (p < upperWord.size()) {
+                size_t e = upperWord.find(kSubwordJoin, p);
+                if (e == std::string::npos) { e = upperWord.size(); }
+                std::string piece = upperWord.substr(p, e - p);
+                p = e + 1;
+                if (piece.empty()) { continue; }
+                std::vector<uint8_t> piecePhons = WordToPhonStream(piece);
+                if (!firstPiece && !piecePhons.empty()) { piecePhons.erase(piecePhons.begin()); }
+                out.insert(out.end(), piecePhons.begin(), piecePhons.end());
+                firstPiece = false;
+            }
+            return out;
+        }
+
         // Contractions are stored in the dict without apostrophes ("ISN'T" -> "ISNT").
         std::string lookupWord = upperWord;
         if (lookupWord.find('\'') != std::string::npos) {
@@ -1501,8 +1633,23 @@ namespace SharpVox {
 
         // 3. Fall back to letter-to-sound rules
         if (phons.empty()) {
-            phons = LetterToSound::Convert(upperWord);
+            std::vector<uint8_t> lts = LetterToSound::Convert(upperWord);
             StatLts++;
+            // LTS output carries no stress marks, which leaves the word
+            // deaccented (flat, and stealing the phrase nucleus). Assign lexical
+            // stress via the MITalk stress rules and splice the OP_STRESS1 /
+            // OP_STRESS2 opcodes before each marked vowel so they reach the
+            // tokenizer exactly like a dictionary word's stress.
+            std::vector<uint8_t> marks = LetterToSound::AssignStress(lts);
+            phons.reserve(lts.size() + 2);
+            for (int i = 0; i < (int)lts.size(); i++) {
+                if (marks[i] == 1) {
+                    phons.push_back(OP_STRESS1);
+                } else if (marks[i] == 2) {
+                    phons.push_back(OP_STRESS2);
+                }
+                phons.push_back(lts[i]);
+            }
         }
 
         // Prepend OP_WORD marker
@@ -1592,9 +1739,9 @@ namespace SharpVox {
     // Stream -> PhonemeToken list
 
     void Phonemizer::AppendWordTokens(std::vector<PhonemeToken>& tokens, const std::vector<uint8_t>& stream,
-                                      bool isContent, bool isPronoun) {
+                                      bool isContent, bool isPronoun, bool isLight) {
         int64_t pending = 0;
-        int64_t persistent = isPronoun ? kPronounWord : 0LL;
+        int64_t persistent = (isPronoun ? kPronounWord : 0LL) | (isLight ? kLightContent : 0LL);
         size_t startIdx = tokens.size();
         bool hadPrimary = false;
 

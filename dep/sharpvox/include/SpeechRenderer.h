@@ -8,12 +8,12 @@
 #include "../include/SynthData.h"
 #include "../include/VoiceData.h"
 #include "../include/Tables.h"
-#include "../include/KlattSynthesizer.h"
+#include "../include/Frame.h"
 #include "../include/PitchInterpolator.h"
 
 namespace SharpVox {
 
-// Converts phonemes into KlattSynthesizer frames using Klatt (1980) and Klatt & Klatt (1990) models.
+// Converts phonemes into KlattSynthesizerFP frames using Klatt (1980) and Klatt & Klatt (1990) models.
 //
 // Parallel control blocks with HEAD and TAIL ramps ensure continuous parameter trajectory blending.
 //
@@ -30,6 +30,14 @@ public:
     static constexpr int32_t kFNZ = 6; static constexpr int32_t kAV = 7;  static constexpr int32_t kAF = 8;
     static constexpr int32_t kAp2 = 9; static constexpr int32_t kAp3 = 10; static constexpr int32_t kAp4 = 11;
     static constexpr int32_t kAp5 = 12; static constexpr int32_t kAp6 = 13; static constexpr int32_t kAB = 14;
+
+    // minimum F3-F2 separation in SaveFrame
+    static constexpr int32_t kMinF3F2Separation = 300;
+
+    // Voicing table cut for nasal murmur (table units, ~0.5 dB each) so nasals dip below neighbouring vowels, pause-final nasals and syllabic EN take a lighter cut.
+    static constexpr int16_t kNasalVoicingCut = 16;
+    static constexpr int16_t kFinalNasalVoicingCut = 8;
+    static constexpr int16_t kSyllabicNasalVoicingCut = 10;
 
     // Block type constants (match Tables.ControlBlockTypeTable)
     static constexpr int32_t kFreqType = 0;    static constexpr int32_t kBWType = 1;
@@ -50,6 +58,7 @@ private:
         int16_t curP_END_Targ    = 0;
         int16_t prevP_END_Targ   = 0;
         int16_t nextP_START_Targ = 0;
+        int32_t prevTailLevel    = 0;
         int32_t curTarget_TIME   = 0;
         int32_t curTarget_STEP   = 0;
         int32_t curTarget_OFFS   = 0;
@@ -68,7 +77,7 @@ private:
 
     ControlBlock _cb[15];
     int16_t _controlData[15]  = {};
-    int16_t _diphEntries[4096] = {};
+    int32_t _diphEntries[4096] = {};
     int32_t _nextDiphEntryIdx  = 0;
 
     // Current-phoneme context
@@ -85,6 +94,15 @@ private:
     int32_t _transLevel    = 0;
     int32_t _transTime     = 0;
     int32_t _curBlockIndex = 0;
+
+    // Q16 scale for fixed-length events (formant transition ramps and stop
+    // bursts) so they shrink toward the linear tempo at high rates instead of
+    // holding their textbook length. 1.0 (65536) below the linearization threshold.
+    int32_t _transRateScaleQ16 = 65536;
+
+    // Q16 cascade-bandwidth widening applied to voiced frames at high rate so
+    // formants settle faster. 1.0 (65536) at/below normal rate.
+    int32_t _bwWidenQ16 = 65536;
 
     int32_t _durDoneInPhon  = 0;
     int32_t _curPhonBufIndex = 0;
@@ -112,6 +130,15 @@ private:
     static constexpr int32_t kStepSizeRes = 3;
     static constexpr int32_t k1pct        = 655;
     static constexpr int32_t kFrameTime   = 5;
+    // Overridable via -D at build time; defaults are the shipped values.
+#ifndef SVX_MIN_TRANS_FRAMES
+#define SVX_MIN_TRANS_FRAMES 2
+#endif
+#ifndef SVX_MAX_TRANS_PCT
+#define SVX_MAX_TRANS_PCT 40
+#endif
+    static constexpr int32_t kMinTransFrames = SVX_MIN_TRANS_FRAMES;  // ramp floor: >=N frames so the delta is not stepped in one frame (click)
+    static constexpr int32_t kMaxTransPct    = SVX_MAX_TRANS_PCT;  // each high-rate ramp <= this pct of the phoneme so a steady core survives
     static constexpr int32_t ReciprocalTableSize = 100;
     static constexpr int32_t kOneHalf     = 0x8000;
 
@@ -298,6 +325,11 @@ private:
     // Scales a duration percentage by the ratio of actual-to-canonical phoneme duration.
     // Produces a frame count proportional to how long this phoneme actually lasts.
     int32_t ScalePrcnt(int32_t pct);
+
+    // Shrinks a fixed transition length by _transRateScaleQ16 so onset and
+    // offset ramps track the tempo at high rates. Full-duration holds and
+    // zero-length transitions pass through unchanged; result is clamped to [1, dur].
+    int32_t LinearizeTransTime(int32_t t);
 
     // Applies vowel-context coloring adjustments to diphthong endpoint formants.
     //

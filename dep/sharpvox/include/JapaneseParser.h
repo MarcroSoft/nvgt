@@ -9,12 +9,13 @@
 namespace SharpVox {
 
     // Converts a UTF-8 hiragana span directly to PhonemeToken objects.
-    // Vowels use JP phoneme IDs (56-60); consonants use English IDs.
+    // Vowels use JP phoneme IDs (62-66); consonants use English IDs.
     // Japanese /r/ uses DX (alveolar tap).
     class JapaneseParser {
     public:
         static std::vector<PhonemeToken> SpanToPhonemes(const std::string& text,
-                                                         size_t pos, size_t len);
+                                                         size_t pos, size_t len,
+                                                         bool normalizeParticles = true);
 
         // Map a single hiragana codepoint to a sequence of phoneme IDs.
         // Supports basic moras, voiced versions, and small tsu (geminate).
