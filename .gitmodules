@@ -5,3 +5,7 @@
 [submodule "vcpkg/bin"]
 	path = vcpkg/bin
 	url = https://github.com/microsoft/vcpkg
+[submodule "plugin/lua"]
+	path = plugin/lua
+	url = https://github.com/MarcroSoft/nvgt_lua
+	branch = main

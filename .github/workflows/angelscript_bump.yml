@@ -1,0 +1,99 @@
+name: angelscript bump
+# Every night, check whether AngelScript (anjo76/angelscript, master) has new commits. If it has, point the
+# angelscript and angelscript-nc vcpkg ports at the newest one on the angelscript-bump branch, open or update
+# a pull request listing the new commits, and start the release build on that branch, so the pull request
+# shows whether the new AngelScript and the ports' patches still build on every platform.
+# A pull request opened with GITHUB_TOKEN does not trigger other workflows, so the build is started here with
+# workflow_dispatch, which is allowed. Such runs don't show on the pull request, so this job waits for the build
+# and sets its result as a commit status on the pull request's commit, linking to the run.
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  statuses: write
+concurrency:
+  group: angelscript-bump
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: angelscript-bump
+      PORTS: vcpkg/ports/angelscript/portfile.cmake vcpkg/ports/angelscript-nc/portfile.cmake
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: update the ports on the angelscript-bump branch
+      run: |
+        # Starts the release build on the branch and reports it as a commit status on the branch's head commit.
+        build() {
+          sha=$(git rev-parse HEAD)
+          gh workflow run release.yml --ref "$BRANCH"
+          run=""
+          for i in $(seq 1 30); do
+            run=$(gh run list --workflow release.yml --branch "$BRANCH" --event workflow_dispatch --limit 1 --json databaseId,headSha,createdAt --jq ".[] | select(.headSha == \"$sha\") | .databaseId")
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          [ -z "$run" ] && { echo "The release build did not start."; exit 1; }
+          url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/$run"
+          status() { gh api "repos/${GITHUB_REPOSITORY}/statuses/$sha" -f state="$1" -f context="release build" -f description="$2" -f target_url="$url" > /dev/null; }
+          status pending "Building on every platform"
+          if gh run watch "$run" --exit-status --interval 60 > /dev/null; then
+            status success "Builds on every platform"
+          else
+            status failure "The build failed, see the run"
+          fi
+        }
+        latest=$(gh api repos/anjo76/angelscript/commits/master --jq .sha)
+        on_main=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
+        if [ "$on_main" = "$latest" ]; then echo "main already uses AngelScript $latest, nothing to do."; exit 0; fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        # An open pull request keeps its branch, so fixes made there (for example to the ports' patches) survive the
+        # next update; otherwise the branch starts over from main.
+        number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
+        if [ -n "$number" ]; then
+          git switch -c "$BRANCH" --track "origin/$BRANCH"
+          # bring in main, so the build uses main's latest release.yml and fixes
+          git merge --no-edit origin/main
+        else
+          git switch -C "$BRANCH"
+        fi
+        proposed=$(grep -m1 -oE 'REF [0-9a-f]{40}' vcpkg/ports/angelscript/portfile.cmake | cut -d' ' -f2)
+        if [ "$proposed" = "$latest" ]; then
+          echo "The pull request already proposes AngelScript $latest."
+          # still push a merge of main, and rebuild with it
+          if [ -n "$number" ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$BRANCH")" ]; then
+            git push origin "$BRANCH"
+            build
+          fi
+          exit 0
+        fi
+        sha512=$(curl -sSfL "https://github.com/anjo76/angelscript/archive/$latest.tar.gz" | sha512sum | cut -d' ' -f1)
+        for p in $PORTS; do
+          sed -i -E "s/(REF )[0-9a-f]{40}/\1$latest/; s/(SHA512 )[0-9a-f]{128}/\1$sha512/" "$p"
+        done
+        git commit -q -am "Update AngelScript to ${latest:0:10}" -m "anjo76/angelscript master, $(gh api repos/anjo76/angelscript/commits/$latest --jq .commit.committer.date)."
+        if [ -n "$number" ]; then git push origin "$BRANCH"; else git push -f origin "$BRANCH"; fi
+        {
+          echo "Points the angelscript and angelscript-nc ports at anjo76/angelscript master, \`${latest:0:10}\` (main has \`${on_main:0:10}\`)."
+          echo
+          echo "New commits:"
+          echo
+          gh api "repos/anjo76/angelscript/compare/$on_main...$latest" --jq '.commits[] | "- [`\(.sha[0:7])`](\(.html_url)) \(.commit.message | split("\n")[0])"'
+          echo
+          echo "The release build runs on this branch and shows as checks here. If a port's patch no longer applies, that is where it fails; fix it on this branch, the next update builds on top of it."
+        } > body.md
+        title="Update AngelScript to ${latest:0:10}"
+        if [ -n "$number" ]; then
+          gh pr edit "$number" --title "$title" --body-file body.md
+        else
+          gh pr create --base main --head "$BRANCH" --title "$title" --body-file body.md
+        fi
+        build

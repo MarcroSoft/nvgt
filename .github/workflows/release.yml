@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - fallback
-      - lua-plugin
       - replace-speech-with-sharpvox
     tags:
       - "*"
@@ -14,6 +13,9 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+env:
+  # Lets vcpkg/build_dependencies.py make authenticated GitHub API requests that otherwise hit the shared runners' rate limit.
+  GITHUB_TOKEN: ${{ github.token }}
 jobs:
   generate_config:
     runs-on: ubuntu-latest
@@ -37,7 +39,7 @@ jobs:
         retention-days: 1
 
   mac_build:
-    runs-on: macos-14
+    runs-on: macos-26
     needs: generate_config
     steps:
     - uses: actions/checkout@v5
@@ -53,6 +55,11 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        echo lua >> user/static_plugins
     - id: cache_macos
       uses: actions/cache@v4
       with:
@@ -106,6 +113,11 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        echo lua >> user/static_plugins
     - uses: actions/cache@v4
       with:
         path: lindev
@@ -116,7 +128,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt full-upgrade -y
-        sudo apt install -y build-essential libtool mesa-common-dev libxext-dev libxcursor-dev ladspa-sdk libxcomposite-dev libsystemd-dev autoconf libxxf86vm-dev libgl1-mesa-dev libxinerama-dev libx11-dev libltdl-dev libgtk-4-dev libglib2.0-dev libspeechd-dev libudev-dev linux-libc-dev libxrandr-dev libxrender-dev libwayland-dev pkg-config xorg-dev libglu1-mesa-dev libxft-dev libgsasl-dev clang python3-jinja2 zip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu autoconf autoconf-archive automake libtool
+        sudo apt install -y build-essential libtool mesa-common-dev libxext-dev libxcursor-dev ladspa-sdk libxcomposite-dev libsystemd-dev autoconf libxxf86vm-dev libgl1-mesa-dev libxinerama-dev libx11-dev libltdl-dev libgtk-4-dev libglib2.0-dev libspeechd-dev libudev-dev linux-libc-dev libxrandr-dev libxrender-dev libwayland-dev pkg-config xorg-dev libglu1-mesa-dev libxft-dev libgsasl-dev clang g++-12 python3-jinja2 zip gcc-aarch64-linux-gnu g++-aarch64-linux-gnu autoconf autoconf-archive automake libtool
         python3 vcpkg/build_dependencies.py --archive
     - name: publish dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event.repository.fork == false }}
@@ -134,7 +146,7 @@ jobs:
         path: 'release'
 
   android_build:
-    runs-on: macos-14
+    runs-on: macos-26
     needs: generate_config
     steps:
     - uses: actions/checkout@v5
@@ -150,6 +162,11 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        echo lua >> user/static_plugins
     - uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
@@ -207,6 +224,13 @@ jobs:
   windows_build:
     runs-on: windows-latest
     needs: generate_config
+    # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
+    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -221,6 +245,11 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
+    - name: add the lua plugin, linked statically
+      shell: bash
+      run: |
+        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        echo lua >> user/static_plugins
     - uses: jwlawson/actions-setup-cmake@v2
       with:
         cmake-version: '4.0.1'
@@ -232,9 +261,9 @@ jobs:
     - name: build dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       run: |
-        curl -d "Oh No! We have to build Windows dependencies. Please stand by." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Oh No! We have to build Windows dependencies. Please stand by." https://ntfy.sh/nvgt || true; fi
         python3 vcpkg/build_dependencies.py --archive
-        curl -d "Script finished." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Script finished." https://ntfy.sh/nvgt || true; fi
     - name: publish dependencies
       if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event.repository.fork == false }}
       run: |
@@ -242,11 +271,11 @@ jobs:
         curl -H "X-Auth: ${{secrets.CIPHP}}" -s "https://nvgt.dev/ci/devlibs_update.php"
     - name: build
       run: |
-        curl -d "Starting Windows build." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows build." https://ntfy.sh/nvgt || true; fi
         pip3 install scons
         choco install -y upx
         scons -s no_upx=0
-        curl -d "Windows build finished." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Windows build finished." https://ntfy.sh/nvgt || true; fi
     - uses: actions/upload-artifact@v7
       with:
         name: windows_release
@@ -269,6 +298,13 @@ jobs:
   windows_package:
     runs-on: windows-2022
     needs: ["android_build", "linux_build", "mac_build", "windows_build"]
+    # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
+    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/download-artifact@v8
@@ -277,7 +313,7 @@ jobs:
         python3 build/ci_set_version.py
     - name: package
       run: |
-        curl -d "Starting Windows package." https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows package." https://ntfy.sh/nvgt || true; fi
         rm -r release
         mv windows_release release
         cd doc
@@ -296,7 +332,7 @@ jobs:
         cd install
         iscc nvgt.iss
         cd ..
-        curl -d "Windows package hopefully created!" https://ntfy.sh/nvgt
+        if [ "$FORK" != "true" ]; then curl -s -d "Windows package hopefully created!" https://ntfy.sh/nvgt || true; fi
     - name: sign_windows
       if: github.event.repository.fork == false
       uses: Azure/artifact-signing-action@v1
@@ -319,7 +355,7 @@ jobs:
         path: 'install/nvgt_${{env.nvgt_version}}.exe'
 
   mac_package:
-    runs-on: macos-14
+    runs-on: macos-26
     needs: ["android_build", "linux_build", "mac_build", "windows_build"]
     steps:
     - uses: actions/checkout@v5

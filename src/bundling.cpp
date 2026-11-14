@@ -75,7 +75,7 @@ void add_game_asset_to_bundle(const string& path, int flags) {
 	while (semi && semi != string::npos && path[semi -1] == '\\' ) semi = path.find_first_of(';', semi + 1);
 	return add_game_asset_to_bundle(path.substr(0, semi), path.substr(semi +1 ), flags);
 }
-set<string> g_bundle_libraries = {"nvdaControllerClient64", "nvgt_sapi32host", "phonon", "SAAPI64", "zdsrapi"};
+set<string> g_bundle_libraries = {"nvgt_sapi32host"};
 void nvgt_bundle_shared_library(const string& libname) {
 	g_bundle_libraries.insert(libname);
 }
@@ -175,6 +175,15 @@ static void archive_write_dir(struct archive* a, const string& disk_dir, const s
 		}
 	}
 }
+// Opens an archive for writing at the given path, throwing a clear exception on failure instead of
+// letting later archive_write_* calls crash on a half-initialized archive. This most commonly fails
+// because the destination file is locked by another program (for example open in an archive viewer).
+static void archive_write_open_or_throw(struct archive* a, const string& path) {
+	if (archive_write_open_filename(a, path.c_str()) != ARCHIVE_OK) {
+		const char* err = archive_error_string(a);
+		throw Poco::FileException(format("could not open %s for writing%s. It may be open or locked by another program.", path, err ? string(" (") + err + ")" : string("")));
+	}
+}
 // Thread-safe message box for use from the compilation worker thread. Dispatches message_box() onto the main thread via SDL_RunOnMainThread and blocks until the result is available. Returns -1 without showing anything for multi-button dialogs when quiet mode is active or a console is available, since the user cannot answer interactive questions in those conditions. Single-button alerts in console mode are printed to stdout.
 struct bundler_msgbox_args { const string& title; const string& text; const vector<string>& buttons; int result; };
 static void bundler_msgbox_callback(void* userdata) {
@@ -211,7 +220,8 @@ class nvgt_compilation_output_impl : public virtual nvgt_compilation_output {
 	Mutex status_text_mtx;
 	void error(const exception& exc, const std::string& error) {
 		error_text = error;
-		throw;
+		if (std::current_exception()) throw;
+		throw Exception(error, exc.what());
 	}
 public:
 	nvgt_compilation_output_impl(const string& input_file) : input_file(input_file), platform(g_platform), stub(g_stub), stub_size(0), config(Util::Application::instance().config()) {}
@@ -320,13 +330,25 @@ protected:
 			File(Path(g.filesystem_path).makeAbsolute(Path(get_input_file()).makeParent()).toString()).copyTo(p.toString());
 		}
 	}
+	bool is_library_excluded(const string& library_basename) {
+		// Returns true if the given library base name matches an entry in the build.shared_library_excludes
+		// configuration option, a space, comma, or semicolon separated list of partial library names. This lets
+		// a project opt out of bundling libraries it does not use, for example phonon or the screen reader clients.
+		const string excludes = config.getString("build.shared_library_excludes", "");
+		if (excludes.empty()) return false;
+		StringTokenizer tok(excludes, " ,;", StringTokenizer::TOK_TRIM | StringTokenizer::TOK_IGNORE_EMPTY);
+		for (const string& ex : tok)
+			if (library_basename.find(ex) != string::npos) return true;
+		return false;
+	}
 	void copy_shared_libraries(const Path& libpath) {
 		// Copy any needed shared libraries to the output package, handling excludes and already existent files.
 		set_status("copying libraries...");
 		File libpathF(libpath);
-		// Determine whether to create, replace, or update shared libraries.
-		if (!libpathF.exists()) libpathF.createDirectories();
-		else if(config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
+		if (g_bundle_libraries.empty()) return; // No libraries need bundling.
+		// If recopying, start fresh. Otherwise the directory is created lazily below, only once a library
+		// actually needs copying, so an empty lib folder is never added to the bundle when everything is excluded.
+		if (libpathF.exists() && config.hasOption("build.shared_library_recopy")) libpathF.remove(true);
 		string source = get_nvgt_lib_directory(g_platform);
 		set<string> libs;
 		Glob::glob(Path(source).append("*").toString(), libs, Glob::GLOB_DOT_SPECIAL | Glob::GLOB_FOLLOW_SYMLINKS | Glob::GLOB_CASELESS);
@@ -339,10 +361,13 @@ protected:
 				break;
 			}
 			if (!included) continue;
+			// Allow a project to opt out of bundling specific libraries via build.shared_library_excludes.
+			if (is_library_excluded(Path(library).getBaseName())) continue;
 			// Now check if the same or a newer version of this library has already been copied and skip it if so, in order to save time.
 			File lib = library;
 			File destF = Path(libpath).append(Path(library).getFileName()).toString();
 			if (destF.exists() && destF.getLastModified() >= lib.getLastModified()) continue;
+			if (!libpathF.exists()) libpathF.createDirectories();
 			lib.copyTo(libpath.toString());
 		}
 	}
@@ -421,7 +446,7 @@ protected:
 			struct archive* a = archive_write_new();
 			archive_write_set_format_zip(a);
 			archive_write_zip_set_compression_deflate(a);
-			archive_write_open_filename(a, zip_out.path().c_str());
+			archive_write_open_or_throw(a, zip_out.path());
 			archive_write_dir(a, workplace.path(), "", build_exec_paths("", ""), store_paths, true);
 			archive_write_close(a);
 			archive_write_free(a);
@@ -463,7 +488,7 @@ protected:
 		bw.writeRaw("\xCA\xFE");
 		if (bundle_mode) {
 			fs.close();
-			fs.open(Path(workplace.path()).append("Contents/resources/exec").toString(), std::ios::out | std::ios::trunc); // App bundles must store their embedded packs and bytecode as a resource so the app bundle can be signed.
+			fs.open(Path(workplace.path()).append("Contents/Resources/exec").toString(), std::ios::out | std::ios::trunc); // App bundles must store their embedded packs and bytecode as a resource so the app bundle can be signed.
 		}
 	}
 	void finalize_output_stream() override {
@@ -514,7 +539,7 @@ protected:
 				archive_write_set_format_iso9660(a);
 				archive_write_set_option(a, nullptr, "rockridge", "1");
 				archive_write_add_filter_none(a);
-				archive_write_open_filename(a, iso_out.path().c_str());
+				archive_write_open_or_throw(a, iso_out.path());
 				if (bundle_mode == 2) archive_write_dir(a, Path(workplace.path()).makeParent().toString(), "", mac_execs, {}, false);
 				else {
 					// Add .app explicitly, then add document assets at ISO root from their source paths.
@@ -672,7 +697,7 @@ protected:
 			struct archive* a = archive_write_new();
 			archive_write_set_format_zip(a);
 			archive_write_zip_set_compression_deflate(a);
-			archive_write_open_filename(a, ipa_out.path().c_str());
+			archive_write_open_or_throw(a, ipa_out.path());
 			archive_write_dir(a, ipa_root.toString(), "", build_exec_paths(ios_exec, format("Payload/%s", appbundle)), store_paths, true);
 			archive_write_close(a);
 			archive_write_free(a);
@@ -710,7 +735,7 @@ protected:
 			struct archive* a = archive_write_new();
 			archive_write_set_format_pax_restricted(a);
 			archive_write_add_filter_gzip(a);
-			archive_write_open_filename(a, tgz_out.path().c_str());
+			archive_write_open_or_throw(a, tgz_out.path());
 			archive_write_dir(a, workplace.path(), "", build_exec_paths(output_path.getFileName(), ""), {}, false);
 			archive_write_close(a);
 			archive_write_free(a);
@@ -898,6 +923,7 @@ protected:
 		Path plugin_dest = Path(workplace.path()).append("lib/arm64-v8a");
 		plugin_dest.makeDirectory();
 		for (const string& lib : g_bundle_libraries) {
+			if (is_library_excluded(lib)) continue;
 			Path src = Path(plugin_src).append(lib + ".so");
 			if (File(src).exists()) {
 				File(src).copyTo(plugin_dest.toString());
@@ -912,7 +938,7 @@ protected:
 		struct archive* apk_arc = archive_write_new();
 		archive_write_set_format_zip(apk_arc);
 		archive_write_zip_set_compression_deflate(apk_arc);
-		archive_write_open_filename(apk_arc, zip_out_location.path().c_str());
+		archive_write_open_or_throw(apk_arc, zip_out_location.path());
 		archive_write_dir(apk_arc, workplace.path(), "", {}, apk_store_arcs, true);
 		archive_write_close(apk_arc);
 		archive_write_free(apk_arc);

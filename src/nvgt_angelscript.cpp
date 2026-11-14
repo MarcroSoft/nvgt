@@ -32,7 +32,7 @@
 #include <Poco/Thread.h>
 #include <Poco/Timestamp.h>
 #include <Poco/UnbufferedStreamBuf.h>
-#include <Poco/zlib.h>
+#include <zlib.h>
 #include <Poco/Util/Application.h>
 #include <SDL3/SDL.h>
 #include "nvgt_angelscript.h"
@@ -141,6 +141,7 @@ class NVGTBytecodeStream : public asIBinaryStream {
 	const int buffer_size = 32 * 1024;
 
 public:
+	std::ostream* raw_copy = nullptr; // When set, everything written is also copied here as is, before compression and encryption.
 	NVGTBytecodeStream() {
 		content = NULL;
 		memset(&zstr, 0, sizeof(z_stream));
@@ -177,6 +178,7 @@ public:
 			zstr.next_out = (Bytef*)(content + zstr.total_out);
 			zstr.avail_out = alloc_size - zstr.total_out;
 		}
+		if (raw_copy) raw_copy->write((const char*)ptr, size);
 		zstr.next_in = (Bytef*)ptr;
 		zstr.avail_in = size;
 		while (zstr.avail_in > 0)
@@ -526,7 +528,7 @@ int ConfigureEngine(asIScriptEngine *engine) {
 	engine->EndConfigGroup();
 	engine->SetDefaultAccessMask(NVGT_SUBSYSTEM_OS);
 	engine->BeginConfigGroup("core");
-	engine->RegisterGlobalFunction("void exit(int=0)", asFUNCTION(Exit), asCALL_CDECL);
+	engine->RegisterGlobalFunction("void exit(int retcode=0)", asFUNCTION(Exit), asCALL_CDECL);
 	engine->EndConfigGroup();
 	engine->BeginConfigGroup("threading");
 	RegisterThreading(engine);
@@ -590,8 +592,6 @@ void ConfigureEngineOptions(asIScriptEngine *engine) {
 		engine->SetEngineProperty(asEP_IGNORE_DUPLICATE_SHARED_INTF, true);
 	if (config.hasOption("scripting.private_prop_as_protected"))
 		engine->SetEngineProperty(asEP_PRIVATE_PROP_AS_PROTECTED, true);
-	if (config.hasOption("scripting.always_impl_default_construct"))
-		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_CONSTRUCT, true);
 	if (config.hasOption("scripting.expand_default_array_to_template"))
 		engine->SetEngineProperty(asEP_EXPAND_DEF_ARRAY_TO_TMPL, true);
 	if (config.hasOption("scripting.require_enum_scope"))
@@ -600,6 +600,10 @@ void ConfigureEngineOptions(asIScriptEngine *engine) {
 		engine->SetEngineProperty(asEP_OPTIMIZE_BYTECODE, false);
 	if (config.hasOption("scripting.disable_bool_conversion_mode"))
 		engine->SetEngineProperty(asEP_BOOL_CONVERSION_MODE, false);
+	if (config.hasOption("scripting.disable_script_class_gc"))
+		engine->SetEngineProperty(asEP_DISABLE_SCRIPT_CLASS_GC, true);
+	if (config.hasOption("scripting.disable_foreach"))
+		engine->SetEngineProperty(asEP_FOREACH_SUPPORT, false);
 	engine->SetEngineProperty(asEP_MAX_NESTED_CALLS, config.getInt("scripting.max_nested_calls", 10000));
 	engine->SetEngineProperty(asEP_MAX_STACK_SIZE, config.getInt("scripting.max_stack_size", 0));
 	engine->SetEngineProperty(asEP_MAX_CALL_STACK_SIZE, config.getInt("scripting.max_call_stack_size", 0));
@@ -610,6 +614,9 @@ void ConfigureEngineOptions(asIScriptEngine *engine) {
 	engine->SetEngineProperty(asEP_HEREDOC_TRIM_MODE, config.getInt("scripting.heredoc_trim_mode", 1));
 	engine->SetEngineProperty(asEP_ALTER_SYNTAX_NAMED_ARGS, config.getInt("scripting.alter_syntax_named_args", 2));
 	engine->SetEngineProperty(asEP_MEMBER_INIT_MODE, config.getInt("scripting.member_init_mode", 0));
+	engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_CONSTRUCT, config.getInt("scripting.always_impl_default_construct", 0));
+	engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY, config.getInt("scripting.always_impl_default_copy", 0));
+	engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, config.getInt("scripting.always_impl_default_copy_construct", 0));
 }
 int CompileScript(asIScriptEngine *engine, const string &scriptFile) {
 	g_pending_plugins.clear();
@@ -670,7 +677,7 @@ int CompileScript(asIScriptEngine *engine, const string &scriptFile) {
 	}
 	return 0;
 }
-int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output) {
+int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output, std::ostream* bytecode_dump) {
 	asIScriptModule *mod = engine->GetModule("nvgt_game", asGM_ONLY_IF_EXISTS);
 	if (mod == 0)
 		return -1;
@@ -684,8 +691,10 @@ int SaveCompiledScript(asIScriptEngine *engine, unsigned char** output) {
 		bw.write7BitEncoded(UInt64(engine->GetEngineProperty(asEEngineProp(i))));
 	bw << Timestamp().raw();
 	bw << Application::instance().config().has("app.no_auto_chdir");
+	codestream.raw_copy = bytecode_dump; // Only the Angelscript bytecode, not NVGT's own data above, so the dump can be fed straight to LoadByteCode.
 	if (mod->SaveByteCode(&codestream, !g_debug) < 0)
 		return -1;
+	codestream.raw_copy = nullptr;
 	return codestream.get(output);
 }
 #ifndef NVGT_MOBILE
@@ -704,7 +713,16 @@ public:
 			if (CompileScript(g_ScriptEngine, script_file.c_str()) < 0) { fail = true; return; }
 			output->prepare();
 			unsigned char* code = NULL;
-			UInt32 code_size = SaveCompiledScript(engine, &code);
+			UInt32 code_size;
+			LayeredConfiguration& config = Util::Application::instance().config();
+			if (config.has("build.bytecode_dump")) {
+				string dump_path = config.getString("build.bytecode_dump", "");
+				if (dump_path.empty()) dump_path = Path(script_file).setExtension("bytecode").makeAbsolute().toString();
+				FileOutputStream dump(dump_path);
+				code_size = SaveCompiledScript(engine, &code, &dump);
+				dump.close();
+				if (code_size > 0 && !dump.good()) throw Exception(format("could not write the bytecode dump to %s", dump_path));
+			} else code_size = SaveCompiledScript(engine, &code);
 			if (code_size < 1) {
 				engine->WriteMessage(script_file.c_str(), 0, 0, asMSGTYPE_ERROR, format("failed to retrieve bytecode while trying to compile %s", output->get_output_file()).c_str());
 				fail = true;
@@ -1126,8 +1144,8 @@ void RegisterUnsorted(asIScriptEngine *engine) {
 	engine->RegisterGlobalProperty("const int NVGT_VERSION_PATCH", (void*)&NVGT_VERSION_PATCH);
 	engine->RegisterGlobalProperty("const string NVGT_VERSION_TYPE", (void*)&NVGT_VERSION_TYPE);
 	engine->RegisterGlobalFunction("void debug_break()", asFUNCTION(asDebugBreak), asCALL_CDECL);
-	engine->RegisterGlobalFunction("void debug_add_file_breakpoint(const string&in, int)", asFUNCTION(asDebuggerAddFileBreakpoint), asCALL_CDECL);
-	engine->RegisterGlobalFunction("void debug_add_func_breakpoint(const string&in)", asFUNCTION(asDebuggerAddFuncBreakpoint), asCALL_CDECL);
+	engine->RegisterGlobalFunction("void debug_add_file_breakpoint(const string&in filename, int line)", asFUNCTION(asDebuggerAddFileBreakpoint), asCALL_CDECL);
+	engine->RegisterGlobalFunction("void debug_add_func_breakpoint(const string&in function_name)", asFUNCTION(asDebuggerAddFuncBreakpoint), asCALL_CDECL);
 	engine->RegisterGlobalProperty("const string[]@ ARGS", &g_command_line_args);
 	engine->RegisterGlobalProperty("const timestamp SCRIPT_BUILD_TIME", &g_script_build_time);
 	//engine->RegisterObjectMethod("dictionary", "bool get(const string&in key, string&out value) const", asFUNCTION(script_dictionary_get_string), asCALL_CDECL_OBJFIRST);

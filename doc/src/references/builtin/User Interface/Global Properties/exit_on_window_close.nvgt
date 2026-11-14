@@ -1,0 +1,16 @@
+/**
+	Makes your game exit as soon as the user asks to close it, for example by pressing alt+f4 or clicking the window's close button.
+	bool exit_on_window_close;
+	## Remarks:
+		This property is false by default, so closing requests only set `window_close_requested` and your game decides what to do. Set it to true and NVGT calls `exit()` for you the next time your game calls `wait()` after such a request.
+		Your game exits exactly as if it had called `exit()` itself, so if you need to save anything first, check `window_close_requested` instead.
+*/
+
+// Example:
+void main() {
+	exit_on_window_close = true;
+	show_window("Example");
+	wait(50); // Give screen readers time to speak the window title.
+	screen_reader_output("Press alt+f4 or close the window to exit.", true);
+	while (true) wait(5);
+}

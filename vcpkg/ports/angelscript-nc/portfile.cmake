@@ -1,13 +1,14 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO anjo76/angelscript
-    REF 3fc00a6abc07c7ad2dec4ed14ff6018a194a54d6
-    SHA512 9a70378733240d4236cd2b1e8a0c297650e117862ea792546728c34c9204ac5a68deb26ffb3dc545fc94bec66bdd103c14168cea374594890e44114738ba03c6
+    REF ba9f9075319fa8b360e54122134d9ac9d163278f
+    SHA512 bcc8aa91c1f698ef3a236113622322c4ce47ddd8a417fa87352991cd48e2dc0b6efbe36162d64e09e8c089f08d1ca5107b61895f671c646666d5cc6211ef7895
     HEAD_REF master
     PATCHES
         add-no-compiler.patch
         mark-threads-private.patch
         fix-dependency.patch
+        fix-double-literal-precision.patch
 )
 
 vcpkg_cmake_configure(

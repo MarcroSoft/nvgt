@@ -119,6 +119,7 @@ This section contains options that are directly related to the compiling/bundlin
 * android_path string defaults to %PATH%: where to look for android development tools
 * android_signature_cert = string: path to a .keystore file used to sign an Android apk bundle
 * android_signature_password = string: password used to access the given signing keystore (see remarks at the bottom of this article)
+* bytecode_dump = string: if defined, write the script's raw Angelscript bytecode to this file during compilation, before it is compressed and encrypted into the executable. Without a value it goes next to the script as `<script name>.bytecode`. The file holds exactly what Angelscript's SaveByteCode produced (without NVGT's own data that precedes it in the executable) so it can be inspected or loaded back with LoadByteCode, and like the executable it only contains debug information when compiling in debug mode. Set it for one build with `-s build.bytecode_dump` or `-s build.bytecode_dump=path`, or from a script with `#pragma config "build.bytecode_dump=path"`.
 * linux_bundle = integer default 2: 0 no bundle, 1 folder, 2 .zip, 3 both folder and .zip
 * mac_bundle = integer default 2: 0 no bundle, 1 .app, 2 .dmg/.zip, 3 both .app and .dmg/.zip
 * no_success_message: specifically hides the compilation success message if defined
@@ -135,7 +136,7 @@ This section contains options that are directly related to the compiling/bundlin
 * product_version = string default 1.0: human friendly version string to display to users in bundles
 * product_version_code = integer default (UnixEpoch / 60): an increasing 32 bit integer that programatically denotes the version of your application (default is usually ok)
 * product_version_semantic = string default 1.0.0: a numeric version string in the form major.minor.patch used by some platforms
-* shared_library_excludes = string default "plist TrueAudioNext GPUUtilities systemd_notify sqlite git2 curl": Partial names of shared libraries that should not be copied from NVGT's source lib directory into the bundled product.
+* shared_library_excludes = string default "": Space, comma, or semicolon separated partial names of shared libraries that should not be copied into the bundled product even if they would otherwise be included. For example `nvgt_sapi32host` omits the 32 bit SAPI host from a Windows game that does not need 32 bit only SAPI voices.
 * shared_library_recopy: If this is set, any shared libraries will be copied from scratch instead of only if they're newer than already copied.
 * windows_bundle = integer default 2: 0 no bundle, 1 folder, 2 .zip, 3 both folder and .zip
 * windows_console: when compiling for windows, build with the console subsystem instead of GUI

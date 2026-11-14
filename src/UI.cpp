@@ -88,6 +88,7 @@ int message_box(const std::string& title, const std::string& text, const std::ve
 	return ret;
 }
 int message_box_script(const std::string& title, const std::string& text, CScriptArray* buttons, unsigned int flags) {
+	if (!buttons) return -1;
 	std::vector<std::string> v_buttons(buttons->GetSize());
 	for (unsigned int i = 0; i < buttons->GetSize(); i++) v_buttons[i] = (*(std::string*)(buttons->At(i)));
 	return message_box(title, text, v_buttons, flags);
@@ -120,7 +121,7 @@ std::string ClipboardGetText() {
 }
 bool ClipboardSetText(const std::string& text) {
 	InputInit();
-	return SDL_SetClipboardText(text.c_str()) == 0;
+	return SDL_SetClipboardText(text.c_str());
 }
 bool ClipboardSetRawText(const std::string& text) {
 	#ifdef _WIN32
@@ -318,27 +319,30 @@ void game_window::draw_circle(float cx, float cy, int radius, unsigned int r, un
 	if (!_renderer) return;
 	_renderer->set_draw_color(r, g, b, 255);
 	SDL_Renderer* rend = _renderer->get_renderer();
+	if (!rend) return;
 	int offsetx = 0, offsety = radius, d = radius - 1, status = 0;
+	bool drew = false;
 	while (offsety >= offsetx) {
 		if (filled) {
-			SDL_RenderLine(rend, cx - offsety, cy + offsetx, cx + offsety, cy + offsetx);
-			SDL_RenderLine(rend, cx - offsetx, cy + offsety, cx + offsetx, cy + offsety);
-			SDL_RenderLine(rend, cx - offsetx, cy - offsety, cx + offsetx, cy - offsety);
-			SDL_RenderLine(rend, cx - offsety, cy - offsetx, cx + offsety, cy - offsetx);
+			drew |= SDL_RenderLine(rend, cx - offsety, cy + offsetx, cx + offsety, cy + offsetx);
+			drew |= SDL_RenderLine(rend, cx - offsetx, cy + offsety, cx + offsetx, cy + offsety);
+			drew |= SDL_RenderLine(rend, cx - offsetx, cy - offsety, cx + offsetx, cy - offsety);
+			drew |= SDL_RenderLine(rend, cx - offsety, cy - offsetx, cx + offsety, cy - offsetx);
 		} else {
-			SDL_RenderPoint(rend, cx + offsetx, cy + offsety);
-			SDL_RenderPoint(rend, cx + offsety, cy + offsetx);
-			SDL_RenderPoint(rend, cx - offsetx, cy + offsety);
-			SDL_RenderPoint(rend, cx - offsety, cy + offsetx);
-			SDL_RenderPoint(rend, cx + offsetx, cy - offsety);
-			SDL_RenderPoint(rend, cx + offsety, cy - offsetx);
-			SDL_RenderPoint(rend, cx - offsetx, cy - offsety);
-			SDL_RenderPoint(rend, cx - offsety, cy - offsetx);
+			drew |= SDL_RenderPoint(rend, cx + offsetx, cy + offsety);
+			drew |= SDL_RenderPoint(rend, cx + offsety, cy + offsetx);
+			drew |= SDL_RenderPoint(rend, cx - offsetx, cy + offsety);
+			drew |= SDL_RenderPoint(rend, cx - offsety, cy + offsetx);
+			drew |= SDL_RenderPoint(rend, cx + offsetx, cy - offsety);
+			drew |= SDL_RenderPoint(rend, cx + offsety, cy - offsetx);
+			drew |= SDL_RenderPoint(rend, cx - offsetx, cy - offsety);
+			drew |= SDL_RenderPoint(rend, cx - offsety, cy - offsetx);
 		}
 		if (status >= 2 * offsetx) { status -= 2 * offsetx + 1; offsetx++; }
 		else if (d < 2 * radius) { status += 2 * offsety - 1; offsety--; }
 		else { status -= 2 * (offsetx - offsety + 1); offsety--; offsetx++; }
 	}
+	if (drew) _renderer->mark_dirty();
 }
 void game_window::draw_menu(CScriptArray* items, float x, float y) {
 	if (!_renderer || !_font || !items) return;
@@ -368,6 +372,22 @@ thread_id_t g_WindowThreadId = 0;
 static std::vector<SDL_Event> post_events; // holds events that should be processed after the next wait() call.
 bool set_application_name(const std::string& name) {
 	return SDL_SetHintWithPriority(SDL_HINT_APP_NAME, name.c_str(), SDL_HINT_OVERRIDE);
+}
+#ifdef _WIN32
+// Declared in SDL_main.h, which can't be included outside nvgt.cpp without its main() rewriting.
+extern "C" SDL_DECLSPEC bool SDLCALL SDL_RegisterApp(const char* name, Uint32 style, void* hInst);
+#endif
+// SDL registers its Windows window class, "SDL_app", when the video subsystem starts, and later registrations
+// are ignored. NVGT starts video only on the first window or input call, so claiming the class before that
+// gives every window of the game a class name of its own, which screen reader app modules and scripts can
+// recognise it by.
+bool set_window_class(const std::string& name) {
+	#ifdef _WIN32
+	if (name.empty() || (SDL_WasInit(0) & SDL_INIT_VIDEO)) return false;
+	return SDL_RegisterApp(name.c_str(), CS_BYTEALIGNCLIENT | CS_OWNDC, nullptr); // the style SDL itself uses
+	#else
+	return false;
+	#endif
 }
 game_window* ShowNVGTWindow(const std::string& window_title, unsigned int flags) {
 	if (g_window) {
@@ -439,10 +459,19 @@ void* get_window_os_handle() {
 	return g_window ? reinterpret_cast<void*>(g_window->get_native_window()) : nullptr;
 }
 game_window* get_window() { return g_window.get(); }
+void Exit(int retcode); // nvgt_angelscript.cpp
+// Set when the user asks to close the game, with alt+f4, the window's close button, the taskbar, cmd+q and so on. SDL only reports
+// such a request, nothing closes by itself, so the script decides: it reads window_close_requested, or sets exit_on_window_close.
+bool g_window_close_requested = false;
+bool g_exit_on_window_close = false;
 void handle_sdl_event(SDL_Event* evt) {
 	if (InputEvent(evt)) return;
 	else if (evt->type == SDL_EVENT_WINDOW_FOCUS_LOST) lost_window_focus();
 	else if (evt->type == SDL_EVENT_WINDOW_FOCUS_GAINED) regained_window_focus();
+	else if (evt->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || evt->type == SDL_EVENT_QUIT) {
+		g_window_close_requested = true;
+		if (g_exit_on_window_close) Exit(0);
+	}
 }
 void refresh_window() {
 	anticheat_check();
@@ -451,7 +480,14 @@ void refresh_window() {
 	#endif
 	SDL_PumpEvents();
 	update_joysticks(); // Update all active joystick instances
-	if (g_window && g_window->get_renderer()) g_window->get_renderer()->present();
+	if (g_window && !(g_window->get_flags() & SDL_WINDOW_HIDDEN)) {
+		graphics_renderer* renderer = g_window->get_renderer();
+		if (renderer && renderer->is_valid()) {
+			// Wayland needs one buffer before a new window appears. Let existing drawing be that first frame.
+			if (!renderer->has_presented() && !renderer->has_pending_frame()) g_window->clear(0, 0, 0);
+			renderer->present_if_dirty();
+		}
+	}
 	SDL_Event evt;
 	std::unordered_set<int> keys_pressed_this_frame;
 	while (SDL_PollEvent(&evt)) {
@@ -541,7 +577,7 @@ bool sdl_set_hint(const std::string& hint, const std::string& value, int priorit
 	return SDL_SetHintWithPriority(hint.c_str(), value.c_str(), SDL_HintPriority(priority));
 }
 std::string sdl_get_hint(const std::string& hint) {
-	return SDL_GetHint(hint.c_str());
+	return from_cstr(SDL_GetHint(hint.c_str()));
 }
 
 static game_window* game_window_factory(const std::string& title, unsigned int w, unsigned int h, unsigned int flags) { return new game_window(title, w, h, flags); }
@@ -684,7 +720,7 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterEnumValue("window_flags", "WINDOW_FLAG_ALWAYS_ON_TOP", SDL_WINDOW_ALWAYS_ON_TOP);
 	engine->RegisterGlobalFunction(_O("bool sdl_set_hint(const string&in hint, const string&in value, int priority = SDL_HINT_NORMAL)"), asFUNCTION(sdl_set_hint), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("string sdl_get_hint(const string&in hint)"), asFUNCTION(sdl_get_hint), asCALL_CDECL);
-	engine->RegisterGlobalFunction(_O("int message_box(const string& in title, const string& in message, string[]@ buttons, uint flags = 0)"), asFUNCTION(message_box_script), asCALL_CDECL);
+	engine->RegisterGlobalFunction(_O("int message_box(const string& in title, const string& in message, string[]@+ buttons, uint flags = 0)"), asFUNCTION(message_box_script), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("int alert(const string &in title, const string &in text, bool can_cancel = false, uint flags = 0)"), asFUNCTION(alert), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("int question(const string& in title, const string& in text, bool can_cancel = false, uint flags = 0)"), asFUNCTION(question), asCALL_CDECL);
 	engine->SetDefaultAccessMask(NVGT_SUBSYSTEM_OS);
@@ -700,6 +736,9 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterGlobalFunction(_O("bool info_box(const string& in title, const string& in caption, const string& in text, uint64 flags = 0)"), asFUNCTION(info_box), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("void next_keyboard_layout()"), asFUNCTION(next_keyboard_layout), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool set_application_name(const string& in name)", asFUNCTION(set_application_name), asCALL_CDECL);
+	engine->RegisterGlobalFunction("bool set_window_class(const string&in name)", asFUNCTION(set_window_class), asCALL_CDECL);
+	engine->RegisterGlobalProperty("bool window_close_requested", &g_window_close_requested);
+	engine->RegisterGlobalProperty("bool exit_on_window_close", &g_exit_on_window_close);
 	engine->RegisterEnum("window_flash_operation");
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_CANCEL", SDL_FLASH_CANCEL);
 	engine->RegisterEnumValue("window_flash_operation", "FLASH_BRIEFLY", SDL_FLASH_BRIEFLY);
@@ -780,7 +819,7 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("game_window", "void draw_circle(float cx, float cy, int radius, uint r, uint g, uint b, bool filled = false)", asMETHOD(game_window, draw_circle), asCALL_THISCALL);
 	engine->RegisterObjectMethod("game_window", "void draw_line(float x1, float y1, float x2, float y2, uint r, uint g, uint b)", asMETHOD(game_window, draw_line), asCALL_THISCALL);
 	engine->RegisterObjectMethod("game_window", "bool render_graphic(graphic@+ gfx, float x, float y)", asMETHOD(game_window, render_graphic), asCALL_THISCALL);
-	engine->RegisterObjectMethod("game_window", "void draw_menu(string[]@ items, float x, float y)", asMETHOD(game_window, draw_menu), asCALL_THISCALL);
+	engine->RegisterObjectMethod("game_window", "void draw_menu(string[]@+ items, float x, float y)", asMETHOD(game_window, draw_menu), asCALL_THISCALL);
 	engine->RegisterObjectMethod("game_window", "uint64 get_native_window() const property", asMETHOD(game_window, get_native_window), asCALL_THISCALL);
 	engine->RegisterGlobalFunction("game_window@ show_window(const string& in title, uint flags = 0)", asFUNCTION(ShowNVGTWindow), asCALL_CDECL);
 	engine->RegisterGlobalFunction("bool destroy_window()", asFUNCTION(DestroyNVGTWindow), asCALL_CDECL);
@@ -821,13 +860,13 @@ void RegisterUI(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("system_tray_menu_item", "void set_enabled(bool enabled) property", asMETHOD(system_tray_menu_item, set_enabled), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu_item", "bool get_enabled() const property", asMETHOD(system_tray_menu_item, get_enabled), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu_item", "void click()", asMETHOD(system_tray_menu_item, click), asCALL_THISCALL);
-	engine->RegisterObjectMethod("system_tray_menu_item", "void set_callback(system_tray_callback@ func)", asMETHOD(system_tray_menu_item, set_callback), asCALL_THISCALL);
+	engine->RegisterObjectMethod("system_tray_menu_item", "void set_callback(system_tray_callback@+ func)", asMETHOD(system_tray_menu_item, set_callback), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu_item", "system_tray_menu@+ get_submenu() property", asMETHOD(system_tray_menu_item, get_submenu), asCALL_THISCALL);
 	// system_tray_menu
 	engine->RegisterObjectBehaviour("system_tray_menu", asBEHAVE_ADDREF, "void f()", asMETHOD(system_tray_menu, duplicate), asCALL_THISCALL);
 	engine->RegisterObjectBehaviour("system_tray_menu", asBEHAVE_RELEASE, "void f()", asMETHOD(system_tray_menu, release), asCALL_THISCALL);
-	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_item(const string&in label, system_tray_callback@ callback = null, bool disabled = false, int pos = -1)", asMETHOD(system_tray_menu, insert_item), asCALL_THISCALL);
-	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_checkbox(const string&in label, bool checked = false, system_tray_callback@ callback = null, bool disabled = false, int pos = -1)", asMETHOD(system_tray_menu, insert_checkbox), asCALL_THISCALL);
+	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_item(const string&in label, system_tray_callback@+ callback = null, bool disabled = false, int pos = -1)", asMETHOD(system_tray_menu, insert_item), asCALL_THISCALL);
+	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_checkbox(const string&in label, bool checked = false, system_tray_callback@+ callback = null, bool disabled = false, int pos = -1)", asMETHOD(system_tray_menu, insert_checkbox), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_submenu(const string&in label, bool disabled = false, int pos = -1)", asMETHOD(system_tray_menu, insert_submenu), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu", "system_tray_menu_item@+ insert_separator(int pos = -1)", asMETHOD(system_tray_menu, insert_separator), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray_menu", "void remove_entry(system_tray_menu_item@+ item)", asMETHOD(system_tray_menu, remove_entry), asCALL_THISCALL);
@@ -836,7 +875,7 @@ void RegisterUI(asIScriptEngine* engine) {
 	// system_tray
 	engine->RegisterObjectBehaviour("system_tray", asBEHAVE_ADDREF, "void f()", asMETHOD(system_tray, duplicate), asCALL_THISCALL);
 	engine->RegisterObjectBehaviour("system_tray", asBEHAVE_RELEASE, "void f()", asMETHOD(system_tray, release), asCALL_THISCALL);
-	engine->RegisterObjectBehaviour("system_tray", asBEHAVE_FACTORY, "system_tray@ f(const string&in tooltip, graphic@ icon = null)", asFUNCTION(system_tray_factory), asCALL_CDECL);
+	engine->RegisterObjectBehaviour("system_tray", asBEHAVE_FACTORY, "system_tray@ f(const string&in tooltip, graphic@+ icon = null)", asFUNCTION(system_tray_factory), asCALL_CDECL);
 	engine->RegisterObjectMethod("system_tray", "bool get_valid() const property", asMETHOD(system_tray, is_valid), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray", "void set_icon(graphic@+ icon)", asMETHOD(system_tray, set_icon), asCALL_THISCALL);
 	engine->RegisterObjectMethod("system_tray", "void set_tooltip(const string&in tooltip)", asMETHOD(system_tray, set_tooltip), asCALL_THISCALL);

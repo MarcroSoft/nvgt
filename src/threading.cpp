@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <Poco/Event.h>
 #include <Poco/Format.h>
@@ -23,7 +24,6 @@
 #include <Poco/ScopedLock.h>
 #include <Poco/Thread.h>
 #include <Poco/ThreadPool.h>
-#include <SDL3/SDL_init.h>
 #include <angelscript.h>
 #include <scriptdictionary.h>
 #include <scripthelper.h>
@@ -62,6 +62,10 @@ public:
 		else return value;
 	}
 	std::string get_exception() { return progress.tryWait(0) ? exception : ""; }
+	void wait() {
+		if (!ctx) throw NullValueException("Object not initialized");
+		progress.wait();
+	}
 	bool call(asIScriptGeneric* gen, ThreadPool* pool = nullptr) {
 		asIScriptContext* aCtx = asGetActiveContext();
 		asIScriptEngine* engine = aCtx->GetEngine();
@@ -74,6 +78,10 @@ public:
 		}
 		if (func_typeid & asTYPEID_OBJHANDLE) func = *(asIScriptFunction**)gen->GetArgAddress(1);
 		else func = (asIScriptFunction*)gen->GetArgAddress(1);
+		if (!func) {
+			aCtx->SetException("Cannot call a null function asynchronously");
+			return false;
+		}
 		if (func->GetReturnTypeId() != subtypeid) {
 			aCtx->SetException(format("return type of %s is incompatible with async result type %s", std::string(func->GetDeclaration()), std::string(engine->GetTypeDeclaration(subtypeid))).c_str());
 			return false;
@@ -97,7 +105,7 @@ public:
 				engine->ReturnContext(ctx);
 				return false;
 			}
-			if (gen->GetArgCount() - 2 <= i || param_default) {
+			if (gen->GetArgCount() - 2 <= i) {
 				if (!param_default) {
 					aCtx->SetException("Not enough arguments");
 					engine->ReturnContext(ctx);
@@ -111,7 +119,8 @@ public:
 					return false;
 				}
 				param_type = engine->GetTypeInfoById(param_typeid);
-				if (param_typeid & asTYPEID_MASK_OBJECT && !(param_typeid & asTYPEID_OBJHANDLE)) {
+				bool param_is_value_object = param_typeid & asTYPEID_MASK_OBJECT && !(param_typeid & asTYPEID_OBJHANDLE);
+				if (param_is_value_object) {
 					// Create a copy of the object.
 					void* obj = engine->CreateScriptObject(param_type);
 					if (!obj) {
@@ -119,11 +128,11 @@ public:
 						engine->ReturnContext(ctx);
 						return false;
 					}
-					value_args[*(void**)obj] = param_type;
 					*(void**)ctx->GetAddressOfArg(i) = obj;
 				}
+				void* default_ref = param_is_value_object? *(void**)ctx->GetAddressOfArg(i) : ctx->GetAddressOfArg(i);
 				if (std::string_view(param_default) == "void") success = ctx->SetArgObject(i, nullptr);
-				else success = ExecuteString(engine, format("return %s;", std::string(param_default)).c_str(), *(void**)ctx->GetAddressOfArg(i), param_typeid, nullptr, defCtx);
+				else success = ExecuteString(engine, format("return %s;", std::string(param_default)).c_str(), default_ref, param_typeid, func->GetModule(), defCtx);
 				if (success < 0) {
 					aCtx->SetException(format("Angelscript error %d while setting default argument %u in async call to %s", success, i + 1, std::string(func->GetDeclaration())).c_str());
 					engine->ReturnContext(ctx);
@@ -133,15 +142,17 @@ public:
 			}
 			arg_typeid = gen->GetArgTypeId(i + 2);
 			arg_type = engine->GetTypeInfoById(arg_typeid);
+			param_type = engine->GetTypeInfoById(param_typeid);
 			success = asINVALID_ARG;
 			if (arg_typeid == asTYPEID_VOID) success = ctx->SetArgAddress(i, nullptr);
+			else if (arg_typeid & asTYPEID_MASK_OBJECT && !(arg_type && param_type && (arg_type == param_type || arg_type->DerivesFrom(param_type) || arg_type->Implements(param_type)))) success = asINVALID_TYPE;
 			else if (arg_typeid == asTYPEID_BOOL || arg_typeid == asTYPEID_INT8 || arg_typeid == asTYPEID_UINT8) success = ctx->SetArgByte(i, *(asBYTE*)gen->GetArgAddress(i + 2));
 			else if (arg_typeid == asTYPEID_INT16 || arg_typeid == asTYPEID_UINT16) success = ctx->SetArgWord(i, *(asWORD*)gen->GetArgAddress(i + 2));
 			else if (arg_typeid == asTYPEID_INT32 || arg_typeid == asTYPEID_UINT32) success = ctx->SetArgDWord(i, *(asDWORD*)gen->GetArgAddress(i + 2));
 			else if (arg_typeid == asTYPEID_INT64 || arg_typeid == asTYPEID_UINT64) success = ctx->SetArgQWord(i, *(asQWORD*)gen->GetArgAddress(i + 2));
 			else if (arg_typeid == asTYPEID_FLOAT) success = ctx->SetArgFloat(i, *(float*)gen->GetArgAddress(i + 2));
 			else if (arg_typeid == asTYPEID_DOUBLE) success = ctx->SetArgDouble(i, *(double*)gen->GetArgAddress(i + 2));
-			else if (arg_typeid & asTYPEID_MASK_OBJECT && arg_typeid & asTYPEID_OBJHANDLE) success = ctx->SetArgObject(i, gen->GetArgObject(i + 2));
+			else if (arg_typeid & asTYPEID_MASK_OBJECT && arg_typeid & asTYPEID_OBJHANDLE) success = ctx->SetArgObject(i, *(void**)gen->GetArgAddress(i + 2));
 			else if (arg_typeid & asTYPEID_MASK_OBJECT) {
 				void* obj = engine->CreateScriptObjectCopy(gen->GetArgAddress(i + 2), arg_type);
 				if (!obj) {
@@ -233,6 +244,10 @@ public:
 		ctx->Execute(); // Todo: Work out what we want to do with exceptions or errors that take place in threads.
 	finish:
 		if (ctx && !g_shutting_down) g_ScriptEngine->ReturnContext(ctx); // We only do this when the engine is not shutting down because the angelscript could get partially destroyed on the main thread before this point in the shutdown case.
+		if (!g_shutting_down) {
+			if (args) args->Release();
+			if (func) func->Release();
+		}
 		if (thread) angelscript_refcounted_release<Thread>(thread);
 		asThreadCleanup();
 		delete this; // Poco wants us to keep these Runnable objects alive as long as the thread is running, meaning we must delete ourself from within the thread to avoid some other sort of cleanup machinery.
@@ -241,24 +256,32 @@ public:
 };
 
 void thread_begin(Thread* thread, asIScriptFunction* func, CScriptDictionary* args) {
-	if (!func) return;
+	if (!func) {
+		if (args) args->Release();
+		return;
+	}
 	angelscript_refcounted_duplicate<Thread>(thread);
 	thread->start(*new script_runnable(func, args, thread));
 }
 void pooled_thread_begin(ThreadPool* pool, asIScriptFunction* func, CScriptDictionary* args) {
 	if (func) pool->start(*new script_runnable(func, args));
+	else if (args) args->Release();
 }
 void pooled_thread_begin(ThreadPool* pool, asIScriptFunction* func, CScriptDictionary* args, const std::string& name) {
 	if (func) pool->start(*new script_runnable(func, args), name);
+	else if (args) args->Release();
 }
 void pooled_thread_begin(ThreadPool* pool, asIScriptFunction* func, CScriptDictionary* args, Thread::Priority priority) {
 	if (func) pool->startWithPriority(priority, *new script_runnable(func, args));
+	else if (args) args->Release();
 }
 void pooled_thread_begin(ThreadPool* pool, asIScriptFunction* func, CScriptDictionary* args, const std::string& name, Thread::Priority priority) {
 	if (func) pool->startWithPriority(priority, *new script_runnable(func, args), name);
+	else if (args) args->Release();
 }
 
 // STL atomics support (thanks @ethindp)!
+template<typename...> inline constexpr bool always_false = false;
 template <class T, typename... A> void atomics_construct(void* mem, A... args) {
 	new (mem) T(args...);
 }
@@ -268,32 +291,10 @@ template <class T> void atomics_destruct(T* obj) {
 template<typename T> bool is_always_lock_free(T* obj) {
 	return obj->is_always_lock_free;
 }
-// Temporary portability shims for standard libraries without C++20 floating point atomics (notably Apple's libc++);
-// remove together with their registrations below once the atomics registration is reworked upstream.
-template <class A, class V> V atomics_fetch_add_fallback(A* obj, V arg, std::memory_order order) {
-	V expected = obj->load(std::memory_order_relaxed);
-	while (!obj->compare_exchange_weak(expected, expected + arg, order, std::memory_order_relaxed)) {}
-	return expected;
-}
-template <class A, class V> V atomics_fetch_sub_fallback(A* obj, V arg, std::memory_order order) {
-	V expected = obj->load(std::memory_order_relaxed);
-	while (!obj->compare_exchange_weak(expected, expected - arg, order, std::memory_order_relaxed)) {}
-	return expected;
-}
-template <class A, class V> V atomics_add_assign_fallback(A* obj, V arg) {
-	return atomics_fetch_add_fallback(obj, arg, std::memory_order_seq_cst) + arg;
-}
-template <class A, class V> V atomics_sub_assign_fallback(A* obj, V arg) {
-	return atomics_fetch_sub_fallback(obj, arg, std::memory_order_seq_cst) - arg;
-}
-// Wrappers instead of member pointers because some standard libraries declare notify_one/notify_all with differing
-// const qualification (GCC 11's __atomic_float has them const), which breaks the asMETHODPR cast.
-template <class A> void atomics_notify_one_wrapper(A* obj) {
-	obj->notify_one();
-}
-template <class A> void atomics_notify_all_wrapper(A* obj) {
-	obj->notify_all();
-}
+template<typename T> void atomic_notify_one(T* obj) { obj->notify_one(); }
+template<typename T> void atomic_notify_all(T* obj) { obj->notify_all(); }
+template<typename atomic_type, typename T> T atomic_post_inc(atomic_type* obj) { return (*obj)++; }
+template<typename atomic_type, typename T> T atomic_post_dec(atomic_type* obj) { return (*obj)--; }
 template<typename T>
 consteval const char* as_script_int_name() {
 	static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
@@ -308,14 +309,14 @@ consteval const char* as_script_int_name() {
 	else if constexpr (sizeof(T) == 8)
 		return s ? "int64" : "uint64";
 	else
-		static_assert(sizeof(T) == 0, "value_type has no matching AngelScript primitive"); // dependent so pre-C++26 compilers accept the discarded branch
+		static_assert(always_false<T>, "value_type has no matching AngelScript primitive");
 } else {
 if (sizeof(T) == 4)
 return "float";
 else if (sizeof(T) == 8)
 return "double";
 else
-static_assert(sizeof(T) == 0, "value_type has no matching AngelScript primitive");
+static_assert(always_false<T>, "value_type has no matching AngelScript primitive");
 }
 }
 template<typename atomic_type, typename divisible_type> void register_atomic_type(asIScriptEngine* engine, const std::string& type_name, const std::string& regular_type_name) {
@@ -334,42 +335,29 @@ template<typename atomic_type, typename divisible_type> void register_atomic_typ
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order success, memory_order failure)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("bool compare_exchange_strong(%s& expected, %s desired, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, compare_exchange_strong, (divisible_type&, divisible_type, std::memory_order) noexcept, bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type_name.c_str(), Poco::format("void wait(%s old, memory_order order = MEMORY_ORDER_SEQ_CST) const", regular_type_name).c_str(), asMETHODPR(atomic_type, wait, (divisible_type, std::memory_order) const noexcept, void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asFUNCTION(atomics_notify_one_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
-	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asFUNCTION(atomics_notify_all_wrapper<atomic_type>), asCALL_CDECL_OBJFIRST);
+engine->RegisterObjectMethod(type_name.c_str(), "void notify_one()", asFUNCTION(atomic_notify_one<atomic_type>), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(type_name.c_str(), "void notify_all()", asFUNCTION(atomic_notify_all<atomic_type>), asCALL_CDECL_OBJFIRST);
 	// Begin type-specific atomics
-	if constexpr((std::is_integral_v<divisible_type> || std::is_floating_point_v<divisible_type>) && !std::is_same_v<divisible_type, bool>) {
-		// Older standard libraries (notably Apple's libc++) lack the C++20 floating point atomic member functions, so
-		// fall back to compare-exchange based wrappers there. Temporary; see the shims above.
-		#ifdef __cpp_lib_atomic_float
-		constexpr bool native_fp_atomics = true;
-		#else
-		constexpr bool native_fp_atomics = false;
-		#endif
-		if constexpr(std::is_integral_v<divisible_type> || native_fp_atomics) {
+if constexpr((std::is_integral_v<divisible_type>
+#ifdef __cpp_lib_atomic_float
+		|| std::is_floating_point_v<divisible_type>
+#endif
+		) && !std::is_same_v<divisible_type, bool>) {
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_add(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_add, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_sub(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_sub, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
-		} else {
-		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_add(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_fetch_add_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
-		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_sub(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_fetch_sub_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
-		}
 		#ifdef __cpp_lib_atomic_min_max // Only available in C++26 mode or later
 		if constexpr(std::is_integral_v<divisible_type>) {
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_max(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_max, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_min(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_min, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 	}
 		#endif
-		if constexpr(std::is_integral_v<divisible_type> || native_fp_atomics) {
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opAddAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator+=, (divisible_type) noexcept, divisible_type), asCALL_THISCALL);
 		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opSubAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator-=, (divisible_type) noexcept, divisible_type), asCALL_THISCALL);
-		} else {
-		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opAddAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_add_assign_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
-		engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opSubAssign(%s arg)", regular_type_name, regular_type_name).c_str(), asFUNCTION((atomics_sub_assign_fallback<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
-		}
 		if constexpr(std::is_integral_v<divisible_type>) {
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPreInc()", regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, () noexcept, divisible_type), asCALL_THISCALL);
-			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostInc(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator++, (int) noexcept, divisible_type), asCALL_THISCALL);
+			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostInc()", regular_type_name).c_str(), asFUNCTION((atomic_post_inc<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPreDec()", regular_type_name).c_str(), asMETHODPR(atomic_type, operator--, () noexcept, divisible_type), asCALL_THISCALL);
-			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostDec(%s arg)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, operator--, (int) noexcept, divisible_type), asCALL_THISCALL);
+			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s opPostDec()", regular_type_name).c_str(), asFUNCTION((atomic_post_dec<atomic_type, divisible_type>)), asCALL_CDECL_OBJFIRST);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_and(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_and, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_or(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_or, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
 			engine->RegisterObjectMethod(type_name.c_str(), Poco::format("%s fetch_xor(%s arg, memory_order order = MEMORY_ORDER_SEQ_CST)", regular_type_name, regular_type_name).c_str(), asMETHODPR(atomic_type, fetch_xor, (divisible_type, std::memory_order) noexcept, divisible_type), asCALL_THISCALL);
@@ -410,14 +398,10 @@ void RegisterAtomics(asIScriptEngine* engine) {
 	register_atomic_type<std::atomic_int64_t, std::int64_t>(engine, "atomic_int64", "int64");
 	register_atomic_type<std::atomic_uint64_t, std::uint64_t>(engine, "atomic_uint64", "uint64");
 	register_atomic_type<std::atomic_bool, bool>(engine, "atomic_bool", "bool");
-	#ifdef __cpp_lib_atomic_lock_free_type_aliases
+#ifdef __cpp_lib_atomic_lock_free_type_aliases
 	register_atomic_type<std::atomic_signed_lock_free, std::atomic_signed_lock_free::value_type>(engine, "atomic_signed_lock_free", as_script_int_name<std::atomic_signed_lock_free::value_type>());
 	register_atomic_type<std::atomic_unsigned_lock_free, std::atomic_unsigned_lock_free::value_type>(engine, "atomic_unsigned_lock_free", as_script_int_name<std::atomic_unsigned_lock_free::value_type>());
-	#else
-	// Standard libraries without the C++20 lock-free alias types (e.g. GCC 11) get 32 bit int atomics, which are lock-free on all supported targets.
-	register_atomic_type<std::atomic_int32_t, std::int32_t>(engine, "atomic_signed_lock_free", "int");
-	register_atomic_type<std::atomic_uint32_t, std::uint32_t>(engine, "atomic_unsigned_lock_free", "uint");
-	#endif
+#endif
 	register_atomic_type<std::atomic<float>, float>(engine, "atomic_float", "float");
 	register_atomic_type<std::atomic<double>, double>(engine, "atomic_double", "double");
 	engine->RegisterGlobalFunction("void atomic_thread_fence(memory_order order)", asFUNCTION(std::atomic_thread_fence), asCALL_CDECL);
@@ -426,7 +410,7 @@ void RegisterAtomics(asIScriptEngine* engine) {
 template <class T> void scoped_lock_construct(void* mem, T* mutex) {
 	new (mem) ScopedLockWithUnlock<T>(*mutex);
 }
-template <class T> void scoped_lock_construct_ms(void* mem, T* mutex, long ms) {
+template <class T> void scoped_lock_construct_ms(void* mem, T* mutex, unsigned int ms) {
 	new (mem) ScopedLockWithUnlock<T>(*mutex, ms);
 }
 void scoped_rw_lock_construct(void* mem, RWLock* lock, bool write) {
@@ -450,27 +434,55 @@ void scoped_read_rw_lock_destruct(ScopedReadRWLock* mem) {
 void scoped_write_rw_lock_destruct(ScopedWriteRWLock* mem) {
 	mem->~ScopedWriteRWLock();
 }
-
+template <class T> void mutex_lock_ms(T* mutex, unsigned int ms) {
+	mutex->lock(ms);
+}
+template <class T> bool mutex_try_lock_ms(T* mutex, unsigned int ms) {
+	return mutex->tryLock(ms);
+}
+bool thread_sleep(unsigned int ms) {
+	if (!Thread::current()) {
+		Thread::sleep(ms);
+		return true;
+	}
+	return Thread::trySleep(ms);
+}
+bool thread_try_join(Thread* thread, unsigned int ms) {
+	return thread->tryJoin(ms);
+}
+void event_wait_ms(Event* event, unsigned int ms) {
+	event->wait(ms);
+}
+bool event_try_wait(Event* event, unsigned int ms) {
+	return event->tryWait(ms);
+}
+bool async_try_wait(async_result* result, unsigned int ms) {
+	return result->progress.tryWait(ms);
+}
 
 template <class T> void RegisterMutexType(asIScriptEngine* engine, const std::string& type) {
 	angelscript_refcounted_register<T>(engine, type.c_str());
-	if constexpr(std::is_same<T, NamedMutex>::value) engine->RegisterObjectBehaviour(type.c_str(), asBEHAVE_FACTORY, format("%s@ m(const string&in)", type).c_str(), asFUNCTION((angelscript_refcounted_factory<T, const std::string&>)), asCALL_CDECL);
+	if constexpr(std::is_same<T, NamedMutex>::value) engine->RegisterObjectBehaviour(type.c_str(), asBEHAVE_FACTORY, format("%s@ m(const string&in name)", type).c_str(), asFUNCTION((angelscript_refcounted_factory<T, const std::string&>)), asCALL_CDECL);
 	else {
 		engine->RegisterObjectBehaviour(type.c_str(), asBEHAVE_FACTORY, format("%s@ m()", type).c_str(), asFUNCTION(angelscript_refcounted_factory<T>), asCALL_CDECL);
-		engine->RegisterObjectMethod(type.c_str(), _O("void lock(uint)"), asMETHODPR(T, lock, (long), void), asCALL_THISCALL);
-		engine->RegisterObjectMethod(type.c_str(), _O("bool try_lock(uint)"), asMETHODPR(T, tryLock, (long), bool), asCALL_THISCALL);
+		engine->RegisterObjectMethod(type.c_str(), _O("void lock(uint milliseconds)"), asFUNCTION(mutex_lock_ms<T>), asCALL_CDECL_OBJFIRST);
+		engine->RegisterObjectMethod(type.c_str(), _O("bool try_lock(uint milliseconds)"), asFUNCTION(mutex_try_lock_ms<T>), asCALL_CDECL_OBJFIRST);
 	}
 	engine->RegisterObjectMethod(type.c_str(), _O("void lock()"), asMETHODPR(T, lock, (), void), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type.c_str(), _O("bool try_lock()"), asMETHODPR(T, tryLock, (), bool), asCALL_THISCALL);
 	engine->RegisterObjectMethod(type.c_str(), _O("void unlock()"), asMETHOD(T, unlock), asCALL_THISCALL);
 	engine->RegisterObjectType(format("%s_lock", type).c_str(), sizeof(ScopedLockWithUnlock<T>), asOBJ_VALUE | asGetTypeTraits<ScopedLock<T>>());
-	engine->RegisterObjectBehaviour(format("%s_lock", type).c_str(), asBEHAVE_CONSTRUCT, format("void f(%s@)", type).c_str(), asFUNCTION(scoped_lock_construct<T>), asCALL_CDECL_OBJFIRST);
-	if constexpr(!std::is_same<T, NamedMutex>::value) engine->RegisterObjectBehaviour(format("%s_lock", type).c_str(), asBEHAVE_CONSTRUCT, format("void f(%s@, uint)", type).c_str(), asFUNCTION(scoped_lock_construct_ms<T>), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectBehaviour(format("%s_lock", type).c_str(), asBEHAVE_CONSTRUCT, format("void f(%s@ target)", type).c_str(), asFUNCTION(scoped_lock_construct<T>), asCALL_CDECL_OBJFIRST);
+	if constexpr(!std::is_same<T, NamedMutex>::value) engine->RegisterObjectBehaviour(format("%s_lock", type).c_str(), asBEHAVE_CONSTRUCT, format("void f(%s@ target, uint milliseconds)", type).c_str(), asFUNCTION(scoped_lock_construct_ms<T>), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectBehaviour(format("%s_lock", type).c_str(), asBEHAVE_DESTRUCT, "void f()", asFUNCTION(scoped_lock_destruct<T>), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(format("%s_lock", type).c_str(), _O("void unlock()"), asMETHOD(ScopedLockWithUnlock<T>, unlock), asCALL_THISCALL);
 }
 
+static std::thread::id g_main_thread_id;
+bool thread_is_main() { return std::this_thread::get_id() == g_main_thread_id; }
+
 void RegisterThreading(asIScriptEngine* engine) {
+	g_main_thread_id = std::this_thread::get_id();
 	engine->RegisterEnum("thread_priority");
 	engine->RegisterEnumValue("thread_priority", "THREAD_PRIORITY_LOWEST", Thread::Priority::PRIO_LOWEST);
 	engine->RegisterEnumValue("thread_priority", "THREAD_PRIORITY_LOW", Thread::Priority::PRIO_LOW);
@@ -478,10 +490,10 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterEnumValue("thread_priority", "THREAD_PRIORITY_HIGH", Thread::Priority::PRIO_HIGH);
 	engine->RegisterEnumValue("thread_priority", "THREAD_PRIORITY_HIGHEST", Thread::Priority::PRIO_HIGHEST);
 	angelscript_refcounted_register<Thread>(engine, "thread");
-	engine->RegisterGlobalFunction("bool get_thread_is_main() property", asFUNCTION(SDL_IsMainThread), asCALL_CDECL);
+	engine->RegisterGlobalFunction("bool get_thread_is_main() property", asFUNCTION(thread_is_main), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("uint thread_current_id()"), asFUNCTION(Thread::currentOsTid), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("void thread_yield()"), asFUNCTION(Thread::yield), asCALL_CDECL);
-	engine->RegisterGlobalFunction(_O("bool thread_sleep(uint ms)"), asFUNCTION(Thread::trySleep), asCALL_CDECL);
+	engine->RegisterGlobalFunction(_O("bool thread_sleep(uint ms)"), asFUNCTION(thread_sleep), asCALL_CDECL);
 	engine->RegisterGlobalFunction(_O("thread@+ get_thread_current() property"), asFUNCTION(Thread::current), asCALL_CDECL);
 	engine->RegisterFuncdef(_O("void thread_callback(dictionary@ args)"));
 	engine->RegisterObjectBehaviour(_O("thread"), asBEHAVE_FACTORY, _O("thread@ t()"), asFUNCTION(angelscript_refcounted_factory<Thread>), asCALL_CDECL);
@@ -492,7 +504,7 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod(_O("thread"), _O("void set_name(const string&in name) property"), asMETHOD(Thread, setName), asCALL_THISCALL);
 	engine->RegisterObjectMethod(_O("thread"), _O("string get_name() const property"), asMETHOD(Thread, getName), asCALL_THISCALL);
 	engine->RegisterObjectMethod(_O("thread"), _O("void join()"), asMETHODPR(Thread, join, (), void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(_O("thread"), _O("bool join(uint ms)"), asMETHOD(Thread, tryJoin), asCALL_THISCALL);
+	engine->RegisterObjectMethod(_O("thread"), _O("bool join(uint ms)"), asFUNCTION(thread_try_join), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(_O("thread"), _O("bool get_running() const property"), asMETHOD(Thread, isRunning), asCALL_THISCALL);
 	engine->RegisterObjectMethod(_O("thread"), _O("void start(thread_callback@ routine, dictionary@ args = null)"), asFUNCTION(thread_begin), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(_O("thread"), _O("void wake_up()"), asMETHOD(Thread, wakeUp), asCALL_THISCALL);
@@ -511,10 +523,10 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterObjectBehaviour("rw_scoped_lock", asBEHAVE_CONSTRUCT, "void f(rw_lock@ lock, bool write)", asFUNCTION(scoped_rw_lock_construct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectBehaviour("rw_scoped_lock", asBEHAVE_DESTRUCT, "void f()", asFUNCTION(scoped_rw_lock_destruct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectType("rw_read_lock", sizeof(ScopedReadRWLock), asOBJ_VALUE | asGetTypeTraits<ScopedReadRWLock>());
-	engine->RegisterObjectBehaviour("rw_read_lock", asBEHAVE_CONSTRUCT, "void f(rw_lock@)", asFUNCTION(scoped_read_rw_lock_construct), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectBehaviour("rw_read_lock", asBEHAVE_CONSTRUCT, "void f(rw_lock@ target)", asFUNCTION(scoped_read_rw_lock_construct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectBehaviour("rw_read_lock", asBEHAVE_DESTRUCT, "void f()", asFUNCTION(scoped_read_rw_lock_destruct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectType("rw_write_lock", sizeof(ScopedWriteRWLock), asOBJ_VALUE | asGetTypeTraits<ScopedWriteRWLock>());
-	engine->RegisterObjectBehaviour("rw_write_lock", asBEHAVE_CONSTRUCT, "void f(rw_lock@)", asFUNCTION(scoped_write_rw_lock_construct), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectBehaviour("rw_write_lock", asBEHAVE_CONSTRUCT, "void f(rw_lock@ target)", asFUNCTION(scoped_write_rw_lock_construct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectBehaviour("rw_write_lock", asBEHAVE_DESTRUCT, "void f()", asFUNCTION(scoped_write_rw_lock_destruct), asCALL_CDECL_OBJFIRST);
 	engine->RegisterEnum("thread_event_type");
 	engine->RegisterEnumValue("thread_event_type", "THREAD_EVENT_MANUAL_RESET", Event::EVENT_MANUALRESET);
@@ -523,8 +535,8 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterObjectBehaviour("thread_event", asBEHAVE_FACTORY, "thread_event@ e(thread_event_type type = THREAD_EVENT_AUTO_RESET)", asFUNCTION((angelscript_refcounted_factory<Event, Event::EventType>)), asCALL_CDECL);
 	engine->RegisterObjectMethod(_O("thread_event"), _O("void set()"), asMETHOD(Event, set), asCALL_THISCALL);
 	engine->RegisterObjectMethod(_O("thread_event"), _O("void wait()"), asMETHODPR(Event, wait, (), void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(_O("thread_event"), _O("void wait(uint ms)"), asMETHODPR(Event, wait, (long), void), asCALL_THISCALL);
-	engine->RegisterObjectMethod(_O("thread_event"), _O("bool try_wait(uint ms)"), asMETHOD(Event, tryWait), asCALL_THISCALL);
+	engine->RegisterObjectMethod(_O("thread_event"), _O("void wait(uint ms)"), asFUNCTION(event_wait_ms), asCALL_CDECL_OBJFIRST);
+	engine->RegisterObjectMethod(_O("thread_event"), _O("bool try_wait(uint ms)"), asFUNCTION(event_try_wait), asCALL_CDECL_OBJFIRST);
 	engine->RegisterObjectMethod(_O("thread_event"), _O("void reset()"), asMETHOD(Event, reset), asCALL_THISCALL);
 	angelscript_refcounted_register<ThreadPool>(engine, "thread_pool");
 	engine->RegisterObjectBehaviour("thread_pool", asBEHAVE_FACTORY, format("thread_pool@ p(int min_capacity = 2, int max_capacity = 16, int idle_time = 60, int stack_size = %d)", POCO_THREAD_STACK_SIZE).c_str(), asFUNCTION((angelscript_refcounted_factory<ThreadPool, int, int, int, int>)), asCALL_CDECL);
@@ -558,7 +570,7 @@ void RegisterThreading(asIScriptEngine* engine) {
 	engine->RegisterObjectMethod("async<T>", "bool get_complete() const property", asMETHOD(async_result, complete), asCALL_THISCALL);
 	engine->RegisterObjectMethod("async<T>", "bool get_failed() const property", asMETHOD(async_result, failed), asCALL_THISCALL);
 	engine->RegisterObjectMethod("async<T>", "string get_exception() const property", asMETHOD(async_result, get_exception), asCALL_THISCALL);
-	engine->RegisterObjectMethod("async<T>", "void wait()", asMETHOD(Event, wait), asCALL_THISCALL, 0, asOFFSET(async_result, progress), false);
-	engine->RegisterObjectMethod("async<T>", "bool try_wait(uint ms)", asMETHOD(Event, tryWait), asCALL_THISCALL, 0, asOFFSET(async_result, progress), false);
+	engine->RegisterObjectMethod("async<T>", "void wait()", asMETHOD(async_result, wait), asCALL_THISCALL);
+	engine->RegisterObjectMethod("async<T>", "bool try_wait(uint ms)", asFUNCTION(async_try_wait), asCALL_CDECL_OBJFIRST);
 	RegisterAtomics(engine);
 }

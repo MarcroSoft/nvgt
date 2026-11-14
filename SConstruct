@@ -64,7 +64,7 @@ if env["NVGT_TARGET"] == "macos":
 elif env["NVGT_TARGET"] == "ios":
 	import subprocess
 	env["ENV"]["SDKROOT"] = subprocess.check_output(["xcrun", "-sdk", "iphoneos", "--show-sdk-path"]).decode().strip()
-	env.Append(CCFLAGS = ["-arch", "arm64", "-xobjective-c++"], LINKFLAGS = ["-arch", "arm64"], LIBS=["mysofa", "pffft"])
+	env.Append(CCFLAGS = ["-arch", "arm64", "-xobjective-c++"], LINKFLAGS = ["-arch", "arm64"])
 	env["FRAMEWORKPREFIX"] = "-weak_framework"
 elif env["NVGT_TARGET"] == "linux":
 	# enable the gold linker, strip the resulting binaries, and add /usr/local/lib to the libpath because it seems we aren't finding libraries unless we do manually.
@@ -72,13 +72,14 @@ elif env["NVGT_TARGET"] == "linux":
 elif env["NVGT_TARGET"] == "android":
 	SConscript("build/android_sconscript.py", exports = ["env"])
 	env.Append(LIBS = common_libs + ["z", "GLESv1_CM", "GLESv2", "OpenSLES", "log", "android"])
-env.Append(CPPDEFINES = ["POCO_STATIC", "POCO_NO_AUTOMATIC_LIBS", "UNIVERSAL_SPEECH_STATIC", "DEBUG" if ARGUMENTS.get("debug", "0") == "1" else "NDEBUG", "UNICODE"])
+env.Append(CPPDEFINES = ["POCO_STATIC", "POCO_NO_AUTOMATIC_LIBS", "PRISM_STATIC", "DEBUG" if ARGUMENTS.get("debug", "0") == "1" else "NDEBUG", "UNICODE"])
 env.Append(CPPPATH = ["#ASAddon/include", "#dep", "#dep/sharpvox/platform/lib"], LIBPATH = ["#build/lib"])
 env["PLUGIN_DEST_DIR"] = "#release/lib_android" if env["NVGT_TARGET"] == "android" else "#release/lib"
 
 # plugins
 static_plugins = []
 static_plugins_object = None
+plugin_env = env.Clone()
 if  ARGUMENTS.get("no_plugins", "0") == "0":
 	try:
 		# First, read the list of static plugins we wish to link if available.
@@ -88,7 +89,6 @@ if  ARGUMENTS.get("no_plugins", "0") == "0":
 				if not l or l.startswith("#"): continue
 				static_plugins.append(l.strip())
 	except FileNotFoundError: pass
-	plugin_env = env.Clone()
 	if env["NVGT_TARGET"] == "android":
 		plugin_env.Append(CXXFLAGS = ["-fPIC"])
 		plugin_env["SHLIBPREFIX"] = ""
@@ -113,8 +113,10 @@ if  ARGUMENTS.get("no_plugins", "0") == "0":
 			static_plugins_object = env.Object(static_plugins_path, static_plugins_path + ".cpp", CPPPATH = env["CPPPATH"] + ["#src"])
 
 # Project libraries
-env.Append(LIBS = ["deps"] + common_libs + ["zs" if env["NVGT_TARGET"] == "windows" else "z", "SDL3", "phonon", "ASAddon"])
-if env["NVGT_TARGET"] == "windows": env.Append(LIBS = ["UniversalSpeechStatic"])
+env.Append(LIBS = ["deps"] + common_libs + ["zs" if env["NVGT_TARGET"] == "windows" else "z", "SDL3", "phonon", "pffft", "mysofa", "ASAddon"])
+if env["NVGT_TARGET"] in ("windows", "macos", "linux"): env.Append(LIBS = ["prism", "fmt", "simdutf", "hwy_contrib", "hwy"])
+if env["NVGT_TARGET"] == "windows": env.Append(LIBS = ["runtimeobject", "uiautomationcore", "rpcrt4", "powrprof", "xaudio2"])
+elif env["NVGT_TARGET"] == "linux": env.Append(LIBS = ["dbus-1"])
 
 # nvgt itself
 sources = [str(i)[4:] for i in Glob("src/*.cpp")]
@@ -129,7 +131,7 @@ VariantDir("build/obj_src", "src", duplicate = 0)
 env.Append(CPPDEFINES = ["NVGT_BUILDING", "NO_OBFUSCATE"])
 if env["NVGT_TARGET"] == "windows":
 	deb_rel_flags = ["/DEBUG", "/INCREMENTAL:NO"] if ARGUMENTS.get("debug", "0") == "1" else ["/OPT:ICF=3"]
-	env.Append(CPPDEFINES = ["_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"], LINKFLAGS = ["/ignore:4099", "/delayload:phonon.dll"] + deb_rel_flags)
+	env.Append(CPPDEFINES = ["_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"], LINKFLAGS = ["/ignore:4099"] + deb_rel_flags)
 	# Modern MSVC toolsets emit unconditional imports of Windows 8+ APIs (for example GetSystemTimePreciseAsFileTime from the STL), which stops nvgt and compiled games from even loading on Windows 7. YY-Thunks (built by the yy-thunks vcpkg port) satisfies those imports at link time with runtime fallbacks to downlevel equivalents. The stub environment is cloned from this one below, so games keep working on Windows 7 too.
 	yy_thunks = os.path.join(env["NVGT_OSDEV_PATH"], "lib", "YY_Thunks_for_Win7.obj")
 	if os.path.isfile(yy_thunks): env.Append(LINKFLAGS = [yy_thunks])
@@ -138,8 +140,8 @@ elif env["NVGT_TARGET"] in ("macos", "ios"):
 	# We must link Apple frameworks here rather than above in the system libraries section to insure that they don't get linked with random plugins.
 	env.Append(FRAMEWORKS = ["AudioToolbox", "AVFoundation", "CoreAudio", "CoreFoundation", "CoreHaptics", "CoreMedia", "CoreVideo", "GameController", "IOKit", "Metal", "QuartzCore", "Security"])
 	if env["NVGT_TARGET"] == "macos":
-		env.Append(FRAMEWORKS = ["AppKit", "Carbon", "Cocoa", "ForceFeedback", "UniformTypeIdentifiers"])
-		env.Append(LINKFLAGS = ["-Wl,-rpath,'@loader_path',-rpath,'@loader_path/lib',-rpath,'@loader_path/../Frameworks',-dead_strip_dylibs", "-mmacosx-version-min=14.0"])
+		env.Append(FRAMEWORKS = ["AppKit", "Carbon", "Cocoa", "CoreServices", "ForceFeedback", "UniformTypeIdentifiers"])
+		env.Append(LINKFLAGS = ["-Wl,-rpath,'@loader_path',-rpath,'@loader_path/lib',-rpath,'@loader_path/../Frameworks',-dead_strip_dylibs", "-mmacosx-version-min=14.0", "-fexperimental-library"])
 	else:
 		env.Append(FRAMEWORKS = ["CoreBluetooth", "CoreGraphics", "CoreMotion", "Foundation", "OpenGLES", "UIKit"])
 		env.Append(CCFLAGS = ["-miphoneos-version-min=16.0"], LINKFLAGS = ["-miphoneos-version-min=16.0"])
@@ -161,13 +163,11 @@ if env["NVGT_TARGET"] == "windows":
 	env.Append(LINKFLAGS = ["/delayload:plist-2.0.dll", "/delayload:archive.dll"])
 	env.Append(LIBS = ["plist-2.0", "archive"])
 	env["no_import_lib"] = 0
-elif env["NVGT_TARGET"] == "android":
-	env["no_import_lib"] = 1
-else: # linux and macos
-	env.Append(LIBS = ["plist-2.0", "archive"])
+elif env["NVGT_TARGET"] == "android": env["no_import_lib"] = 1
+elif env["NVGT_TARGET"] != "ios": env.Append(LIBS = ["plist-2.0", "archive"])
 extra_objects = [version_object]
 if static_plugins_object: extra_objects.append(static_plugins_object)
-if env["NVGT_TARGET"] not in ("ios", "android"):
+if env["NVGT_TARGET"] not in ["android", "ios"]:
 	if ARGUMENTS.get("debug", "0") == "1": env["PDB"] = "#build/debug/nvgt.pdb"
 	nvgt = env.Program("release/nvgt", env.Object([os.path.join("build/obj_src", s) for s in sources]) + extra_objects)
 	if env["NVGT_TARGET"] == "macos":
@@ -202,7 +202,6 @@ elif env["NVGT_TARGET"] == "android":
 	for d in [runner_dest, stub_dest]:
 		android_deps.extend(env.Install(d, libcxx_path))
 		android_deps.extend(env.Install(d, os.path.join(env["NVGT_OSDEV_PATH"], "lib/libSDL3.so")))
-		android_deps.extend(env.Install(d, os.path.join(env["NVGT_OSDEV_PATH"], "lib/libphonon.so")))
 	# Finally, trigger Gradle to package the .bin and the APK
 	def run_gradle(target, source, env):
 		import subprocess
@@ -228,7 +227,7 @@ def fix_stub(target, source, env):
 			f.write(b"NV")
 			f.close()
 
-if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] != "android":
+if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("android"):
 	stub_platform = env["NVGT_TARGET"] if env["NVGT_TARGET"] != "macos" else "mac"
 	VariantDir("build/obj_stub", "src", duplicate = 0)
 	stub_env.Append(CPPDEFINES = ["NVGT_STUB"])
