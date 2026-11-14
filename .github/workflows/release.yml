@@ -12,6 +12,9 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+env:
+  # Lets vcpkg/build_dependencies.py make authenticated GitHub API requests that otherwise hit the shared runners' rate limit.
+  GITHUB_TOKEN: ${{ github.token }}
 jobs:
   generate_config:
     runs-on: ubuntu-latest

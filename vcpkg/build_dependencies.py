@@ -21,6 +21,32 @@ def bootstrap_vcpkg():
 		subprocess.check_output(vcpkg_path.parent / "bootstrap-vcpkg.bat")
 	else:
 		subprocess.check_output(vcpkg_path.parent / "bootstrap-vcpkg.sh")
+def prefetch_github_api_downloads():
+	# The pcre2 port asks the GitHub API (unauthenticated) which sljit commit its release tag pins. CI runners share IPs and often hit the 60 requests/hour limit, failing with HTTP 403. When a GITHUB_TOKEN is available, fetch that file ourselves with authentication and drop it in vcpkg's downloads folder; vcpkg still verifies its SHA512 and simply uses it instead of downloading.
+	token = os.environ.get("GITHUB_TOKEN")
+	if not token: return
+	import json, urllib.request
+	try: version = json.loads((vcpkg_path.parent / "ports" / "pcre2" / "vcpkg.json").read_text())["version"]
+	except (OSError, KeyError, ValueError): return
+	ref = f"pcre2-{version}"
+	downloads = Path(os.environ.get("VCPKG_DOWNLOADS", vcpkg_path.parent / "downloads"))
+	dest = downloads / f"pcre2-{ref}-sljit-gitlink.json"
+	if dest.exists(): return
+	req = urllib.request.Request(f"https://api.github.com/repos/PCRE2Project/pcre2/contents/deps/sljit?ref={ref}", headers = {"Authorization": f"Bearer {token}", "User-Agent": "curl/8"}) # GitHub only pretty-prints the JSON (which the port's SHA512 is computed over) for curl user agents.
+	try:
+		with urllib.request.urlopen(req, timeout = 30) as r: data = r.read()
+	except OSError as e:
+		print(f"warning: could not prefetch the pcre2 sljit gitlink ({e}), vcpkg will try itself")
+		return
+	# vcpkg fails outright on a cached download with the wrong hash rather than refetching it, so only keep the file if it matches what the port expects.
+	import re
+	try: expected = re.search(r"sljit_gitlink_hash SHA512 ([0-9a-f]{128})", (vcpkg_path.parent / "ports" / "pcre2" / "portfile.cmake").read_text())
+	except OSError: expected = None
+	if not expected or hashlib.sha512(data).hexdigest() != expected.group(1):
+		print("warning: prefetched pcre2 sljit gitlink does not match the port's SHA512, leaving the download to vcpkg")
+		return
+	downloads.mkdir(parents = True, exist_ok = True)
+	dest.write_bytes(data)
 def build(triplet = "", do_archive = False, out_dir = ""):
 	if not triplet:
 		# Try to determine, logic probably could be improved
@@ -33,6 +59,7 @@ def build(triplet = "", do_archive = False, out_dir = ""):
                         triplet = "arm64-linux"
 		else: sys.exit("unable to determine platform, please pass a triplet explicitly.")
 	bootstrap_vcpkg()
+	prefetch_github_api_downloads()
 	try: subprocess.run([vcpkg_path, "install", "--triplet", triplet, "--x-manifest-root", vcpkg_path.parents[1]], check=True)
 	except subprocess.CalledProcessError as cpe: sys.exit(f"Building packages for {triplet} failed with error code {cpe.returncode}.")
 	dev_basename = ""
