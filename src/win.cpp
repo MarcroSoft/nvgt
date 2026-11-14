@@ -32,7 +32,6 @@
 #include <sapi32proto.h>
 #include <Poco/AtomicFlag.h>
 #include <Poco/UnicodeConverter.h>
-#include <UniversalSpeech.h>
 #include "win.h"
 
 using namespace std;
@@ -350,7 +349,6 @@ bool screen_reader_silence() {
 	if (!screen_reader_load()) return false;
 	return speechStop();
 }
-
 // Thanks Quentin Cosendey (Universal Speech) for this jaws keyboard hook code as well as to male-srdiecko and silak for various improvements and fixes that have taken place since initial implementation.
 bool altPressed = false;
 bool capsPressed = false;
