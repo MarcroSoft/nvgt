@@ -11,7 +11,6 @@
 */
 
 #pragma once
-#include <speech.h>
 #include <string>
 #include <vector>
 #include <memory>

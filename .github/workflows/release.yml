@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fallback
+      - replace-speech-with-sharpvox
     tags:
       - "*"
     paths-ignore:
