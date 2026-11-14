@@ -131,10 +131,10 @@ VariantDir("build/obj_src", "src", duplicate = 0)
 env.Append(CPPDEFINES = ["NVGT_BUILDING", "NO_OBFUSCATE"])
 if env["NVGT_TARGET"] == "windows":
 	deb_rel_flags = ["/DEBUG", "/INCREMENTAL:NO"] if ARGUMENTS.get("debug", "0") == "1" else ["/OPT:ICF=3"]
-env.Append(CPPDEFINES = ["_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"], LINKFLAGS = ["/ignore:4099", "/delayload:phonon.dll"] + deb_rel_flags)
-# Modern MSVC toolsets emit unconditional imports of Windows 8+ APIs (for example GetSystemTimePreciseAsFileTime from the STL), which stops nvgt and compiled games from even loading on Windows 7. YY-Thunks (built by the yy-thunks vcpkg port) satisfies those imports at link time with runtime fallbacks to downlevel equivalents. The stub environment is cloned from this one below, so games keep working on Windows 7 too.
-yy_thunks = os.path.join(env["NVGT_OSDEV_PATH"], "lib", "YY_Thunks_for_Win7.obj")
-if os.path.isfile(yy_thunks): env.Append(LINKFLAGS = [yy_thunks])
+	env.Append(CPPDEFINES = ["_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"], LINKFLAGS = ["/ignore:4099"] + deb_rel_flags)
+	# Modern MSVC toolsets emit unconditional imports of Windows 8+ APIs (for example GetSystemTimePreciseAsFileTime from the STL), which stops nvgt and compiled games from even loading on Windows 7. YY-Thunks (built by the yy-thunks vcpkg port) satisfies those imports at link time with runtime fallbacks to downlevel equivalents. The stub environment is cloned from this one below, so games keep working on Windows 7 too.
+	yy_thunks = os.path.join(env["NVGT_OSDEV_PATH"], "lib", "YY_Thunks_for_Win7.obj")
+	if os.path.isfile(yy_thunks): env.Append(LINKFLAGS = [yy_thunks])
 elif env["NVGT_TARGET"] in ("macos", "ios"):
 	sources.append("apple.mm")
 	# We must link Apple frameworks here rather than above in the system libraries section to insure that they don't get linked with random plugins.
