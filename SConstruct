@@ -79,9 +79,7 @@ env["PLUGIN_DEST_DIR"] = "#release/lib_android" if env["NVGT_TARGET"] == "androi
 # plugins
 static_plugins = []
 static_plugins_object = None
-stub_lib_substitutes = {} # path of a static plugin library linked into nvgt: the library to link into the stubs instead
 plugin_env = env.Clone()
-plugin_env["NVGT_STUB_LIBS"] = True # tells plugin SConscripts they may return {"nvgt": libs, "stub": libs}, see below
 if  ARGUMENTS.get("no_plugins", "0") == "0":
 	try:
 		# First, read the list of static plugins we wish to link if available.
@@ -105,10 +103,6 @@ if  ARGUMENTS.get("no_plugins", "0") == "0":
 		# Build the plugin.
 		# A list of static libraries NVGT should link with is returned if the plugin generates any.
 		plug = SConscript(s, variant_dir = f"build/obj_plugin/{plugname}", duplicate = 0, exports = {"env": plugin_env, "nvgt_env": env})
-		# A plugin may instead return {"nvgt": libs, "stub": libs} to link a different build of itself into the stubs, as the lua plugin does with a Lua that cannot compile source code.
-		if isinstance(plug, dict):
-			if plugname in static_plugins: stub_lib_substitutes.update(zip([str(l) for l in Flatten(plug["nvgt"])], Flatten(plug["stub"])))
-			plug = plug["nvgt"]
 		if plug and plugname in static_plugins: env.Append(LIBS = plug)
 	# Finally generate nvgt_plugins.cpp
 	static_plugins_path = os.path.join(tempfile.gettempdir(), "nvgt_plugins")
@@ -201,7 +195,7 @@ elif env["NVGT_TARGET"] == "android":
 	android_stub_env = env.Clone()
 	android_stub_env.Append(CPPDEFINES = ["NVGT_STUB"])
 	VariantDir("build/obj_stub", "src", duplicate = 0)
-	libgame = env.SharedLibrary(os.path.join(stub_dest, "libgame"), android_stub_env.Object([os.path.join("build/obj_stub", s) for s in sources]) + extra_objects, LIBS = [stub_lib_substitutes.get(str(l), l) for l in Flatten(env["LIBS"])])
+	libgame = env.SharedLibrary(os.path.join(stub_dest, "libgame"), android_stub_env.Object([os.path.join("build/obj_stub", s) for s in sources]) + extra_objects)
 	# Copy dependencies to both directories.
 	libcxx_path = os.path.join(env["NDK_HOME"], "toolchains", "llvm", "prebuilt", env["NDK_HOST_TAG"], "sysroot", "usr", "lib", "aarch64-linux-android", "libc++_shared.so")
 	android_deps = [runner_lib, libgame]
@@ -241,7 +235,7 @@ if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("android
 	if ARGUMENTS.get("stub_obfuscation", "0") == "1": stub_env["CPPDEFINES"].remove("NO_OBFUSCATE")
 	stub_objects = stub_env.Object([os.path.join("build/obj_stub", s) for s in sources]) + extra_objects
 	# This fork only ships compiler-less stubs under the default names; games cannot use script_module::build/compile_function at runtime, in exchange for halving the stub payload.
-	stublibs = [stub_lib_substitutes.get(str(l), l) for l in Flatten(stub_env["LIBS"])]
+	stublibs = list(stub_env["LIBS"])
 	if "angelscript" in stublibs: stublibs[stublibs.index("angelscript")] = "angelscript_nc"
 	if ARGUMENTS.get("debug", "0") == "1": stub_env["PDB"] = f"#build/debug/nvgt_{stub_platform}.pdb"
 	stub = stub_env.Program(f"release/stub/nvgt_{stub_platform}", stub_objects, LIBS = stublibs)
