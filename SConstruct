@@ -234,11 +234,8 @@ if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("android
 	if env["NVGT_TARGET"] == "windows": stub_env.Append(LINKFLAGS = ["/subsystem:windows"])
 	if ARGUMENTS.get("stub_obfuscation", "0") == "1": stub_env["CPPDEFINES"].remove("NO_OBFUSCATE")
 	stub_objects = stub_env.Object([os.path.join("build/obj_stub", s) for s in sources]) + extra_objects
-	# This fork only ships compiler-less stubs under the default names; games cannot use script_module::build/compile_function at runtime, in exchange for halving the stub payload.
-	stublibs = list(stub_env["LIBS"])
-	if "angelscript" in stublibs: stublibs[stublibs.index("angelscript")] = "angelscript_nc"
 	if ARGUMENTS.get("debug", "0") == "1": stub_env["PDB"] = f"#build/debug/nvgt_{stub_platform}.pdb"
-	stub = stub_env.Program(f"release/stub/nvgt_{stub_platform}", stub_objects, LIBS = stublibs)
+	stub = stub_env.Program(f"release/stub/nvgt_{stub_platform}", stub_objects)
 	stub_env.AddPostAction(stub, fix_stub)
 	if env["NVGT_TARGET"] == "windows":
 		env.Install("c:/nvgt/stub", stub)
@@ -246,6 +243,18 @@ if ARGUMENTS.get("no_stubs", "0") == "0" and env["NVGT_TARGET"] not in ("android
 			stub_u = stub_env.UPX(f"release/stub/nvgt_{stub_platform}_upx.bin", stub)
 			stub_env.AddPostAction(stub_u, fix_stub)
 			env.Install("c:/nvgt/stub", stub_u)
+	stublibs = list(stub_env["LIBS"])
+	if "angelscript" in stublibs:
+		stublibs[stublibs.index("angelscript")] = "angelscript_nc"
+		if ARGUMENTS.get("debug", "0") == "1": stub_env["PDB"] = f"#build/debug/nvgt_{stub_platform}_nc.pdb"
+		stub_nc = stub_env.Program(f"release/stub/nvgt_{stub_platform}_nc", stub_objects, LIBS = stublibs)
+		stub_env.AddPostAction(stub_nc, fix_stub)
+		if env["NVGT_TARGET"] == "windows":
+			env.Install("c:/nvgt/stub", stub_nc)
+			if "upx" in env:
+				stub_nc_u = stub_env.UPX(f"release/stub/nvgt_{stub_platform}_nc_upx.bin", stub_nc)
+				stub_env.AddPostAction(stub_nc_u, fix_stub)
+				env.Install("c:/nvgt/stub", stub_nc_u)
 
 # 32 bit SAPI host, a small helper process which allows 64 bit NVGT applications to keep using SAPI voices that only ship 32 bit binaries (Eloquence, older RealSpeak etc).
 if env["NVGT_TARGET"] == "windows" and ARGUMENTS.get("no_sapi32host", "0") == "0":
