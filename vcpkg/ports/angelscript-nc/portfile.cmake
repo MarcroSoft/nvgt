@@ -8,7 +8,6 @@ vcpkg_from_github(
         add-no-compiler.patch
         mark-threads-private.patch
         fix-dependency.patch
-        fix-double-literal-precision.patch
 )
 
 vcpkg_cmake_configure(
