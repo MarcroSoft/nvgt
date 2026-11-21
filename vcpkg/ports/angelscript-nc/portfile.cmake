@@ -8,6 +8,8 @@ vcpkg_from_github(
         add-no-compiler.patch
         mark-threads-private.patch
         fix-dependency.patch
+        # samtupy/angelscript commits not yet in anjo76 (scoped reference type fixes, asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS), needed by the Jolt math types
+        samtupy-scoped-reference-types.patch
 )
 
 vcpkg_cmake_configure(

@@ -1,0 +1,565 @@
+diff --git a/sdk/angelscript/include/angelscript.h b/sdk/angelscript/include/angelscript.h
+index 5da2ae1b..7141db43 100644
+--- a/sdk/angelscript/include/angelscript.h
++++ b/sdk/angelscript/include/angelscript.h
+@@ -191,6 +191,7 @@ enum asEEngineProp
+ 	asEP_MEMBER_INIT_MODE                   = 38,
+ 	asEP_BOOL_CONVERSION_MODE               = 39,
+ 	asEP_FOREACH_SUPPORT                    = 40,
++	asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS = 41,
+ 
+ 	asEP_LAST_PROPERTY
+ };
+diff --git a/sdk/angelscript/source/as_bytecode.cpp b/sdk/angelscript/source/as_bytecode.cpp
+index 1be401a7..6f187b7d 100644
+--- a/sdk/angelscript/source/as_bytecode.cpp
++++ b/sdk/angelscript/source/as_bytecode.cpp
+@@ -422,7 +422,11 @@ bool asCByteCode::RemoveUnusedValue(asCByteInstruction *curr, asCByteInstruction
+ 	//                         NOT, BNOT, IncV, DecV, NEG, iTOf (and all other type casts)
+ 
+ 	// The value isn't used for anything
+-	if( curr->op != asBC_FREE && // Can't remove the FREE instruction
++	if( curr->op != asBC_FREE &&    // Can't remove the FREE instruction
++		curr->op != asBC_ClrVPtr && // Can't remove the ClrVPtr instruction either: clearing a variable
++		                            // can matter to a later REFCPY/RefCpyV targeting it (it condition-
++		                            // ally releases whatever it finds there), even though that isn't
++		                            // visible to this analysis as a "read" of the variable
+ 		(asBCInfo[curr->op].type == asBCTYPE_wW_rW_rW_ARG ||
+ 		 asBCInfo[curr->op].type == asBCTYPE_wW_rW_ARG    ||
+ 		 asBCInfo[curr->op].type == asBCTYPE_wW_rW_DW_ARG ||
+diff --git a/sdk/angelscript/source/as_compiler.cpp b/sdk/angelscript/source/as_compiler.cpp
+index 9aa9a24d..96b74c38 100644
+--- a/sdk/angelscript/source/as_compiler.cpp
++++ b/sdk/angelscript/source/as_compiler.cpp
+@@ -4039,6 +4039,36 @@ void asCCompiler::CompileInitList(asCExprValue *var, asCScriptNode *node, asCByt
+ 	ReleaseTemporaryVariable(bufferVar, bc);
+ }
+ 
++// Scoped reference types have no AddRef behaviour, so unlike other reference types the list
++// buffer cannot simply share the object produced by the expression through a handle assignment,
++// as the expression's temporary (or the variable it refers to) would still be released afterwards
++// and leave a dangling pointer in the buffer. Instead the value is copied into a new temporary
++// variable whose reference is then moved into the list buffer, which takes ownership of it.
++void asCCompiler::CompileInitListScopedElement(asCDataType &dt, asCExprContext *arg, short bufferVar, asUINT bufferSize, asCScriptNode *node, asCByteCode &bcInit)
++{
++	asCDataType varType = dt;
++	varType.MakeReference(false);
++	varType.MakeReadOnly(false);
++	int offset = AllocateVariable(varType, true);
++
++	asCExprContext tmp(engine);
++	CompileInitAsCopy(varType, offset, &tmp, arg, node, false);
++	MergeExprBytecode(arg, &tmp);
++
++	// Move the reference from the variable to the list element and clear
++	// the variable so the object isn't released when the variable is freed
++	arg->bc.InstrSHORT(asBC_PSF, (short)offset);
++	arg->bc.InstrSHORT_DW(asBC_PshListElmnt, bufferVar, bufferSize);
++	arg->bc.InstrSHORT_DW(asBC_COPY, AS_PTR_SIZE, asTYPEID_OBJHANDLE | engine->GetTypeIdFromDataType(varType));
++	arg->bc.Instr(asBC_PopPtr);
++	arg->bc.InstrSHORT(asBC_ClrVPtr, (short)offset);
++	ReleaseTemporaryVariable(offset, &arg->bc);
++
++	ProcessDeferredParams(arg);
++
++	bcInit.AddCode(&arg->bc);
++}
++
+ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScriptNode *&valueNode, int bufferTypeId, short bufferVar, asUINT &bufferSize, asCByteCode &bcInit, int &elementsInSubList)
+ {
+ 	if( patternNode->type == asLPT_START )
+@@ -4203,6 +4233,11 @@ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScr
+ 					dt.MakeReadOnly(false);
+ 					dt.MakeReference(false);
+ 
++					// Scoped types don't support handles, but a factory call produces a handle to
++					// the new object so the value must be stored as the type itself to get a copy
++					if( dt.IsObjectHandle() && dt.GetTypeInfo() && (dt.GetTypeInfo()->flags & asOBJ_SCOPED) )
++						dt.MakeHandle(false);
++
+ 					// Values on the list must be aligned to 32bit boundaries, except if the type is smaller than 32bit.
+ 					if( bufferSize & 0x3 )
+ 						bufferSize += 4 - (bufferSize & 0x3);
+@@ -4265,6 +4300,7 @@ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScr
+ 				bufferSize += 4 - (bufferSize & 0x3);
+ 
+ 			// Compile the lvalue
++			bool isScopedElement = false;
+ 			lctx.bc.InstrSHORT_DW(asBC_PshListElmnt, bufferVar, bufferSize);
+ 			lctx.type.Set(dt);
+ 			lctx.type.isLValue = true;
+@@ -4278,6 +4314,12 @@ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScr
+ 				lctx.type.isExplicitHandle = true;
+ 				lctx.type.dataType.MakeReference(true);
+ 			}
++			else if (dt.GetTypeInfo()->flags & asOBJ_SCOPED)
++			{
++				// Scoped types have no AddRef behaviour so the value is moved into the list
++				// buffer by CompileInitListScopedElement below instead of a handle assignment
++				isScopedElement = true;
++			}
+ 			else if (dt.GetTypeInfo()->flags & asOBJ_REF)
+ 			{
+ 				// For reference types stored by value we must make sure the correct type is 
+@@ -4326,7 +4368,9 @@ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScr
+ 				}
+ 			}
+ 
+-			if( lctx.type.dataType.IsNullHandle() )
++			if( isScopedElement )
++				CompileInitListScopedElement(dt, &rctx, bufferVar, bufferSize, valueNode, bcInit);
++			else if( lctx.type.dataType.IsNullHandle() )
+ 			{
+ 				// Don't add any code to assign a null handle. RefCpy doesn't work without a known type.
+ 				// The buffer is already initialized to zero in asBC_AllocMem anyway.
+@@ -4420,25 +4464,30 @@ int asCCompiler::CompileInitListElement(asSListPatternNode *&patternNode, asCScr
+ 						if( bufferSize & 0x3 )
+ 							bufferSize += 4 - (bufferSize & 0x3);
+ 
+-						asCExprContext lctx(engine);
+-						lctx.bc.InstrSHORT_DW(asBC_PshListElmnt, bufferVar, bufferSize);
+-						lctx.type.Set(dt);
+-						lctx.type.isLValue = true;
+-						lctx.type.isExplicitHandle = true;
+-						lctx.type.dataType.MakeReference(true);
++						if( dt.GetTypeInfo()->flags & asOBJ_SCOPED )
++							CompileInitListScopedElement(dt, &rctx, bufferVar, bufferSize, valueNode, bcInit);
++						else
++						{
++							asCExprContext lctx(engine);
++							lctx.bc.InstrSHORT_DW(asBC_PshListElmnt, bufferVar, bufferSize);
++							lctx.type.Set(dt);
++							lctx.type.isLValue = true;
++							lctx.type.isExplicitHandle = true;
++							lctx.type.dataType.MakeReference(true);
+ 
+-						asCExprContext ctx(engine);
+-						DoAssignment(&ctx, &lctx, &rctx, valueNode, valueNode, ttAssignment, valueNode);
++							asCExprContext ctx(engine);
++							DoAssignment(&ctx, &lctx, &rctx, valueNode, valueNode, ttAssignment, valueNode);
+ 
+-						if( !ctx.type.dataType.IsPrimitive() )
+-							ctx.bc.Instr(asBC_PopPtr);
++							if( !ctx.type.dataType.IsPrimitive() )
++								ctx.bc.Instr(asBC_PopPtr);
+ 
+-						// Release temporary variables used by expression
+-						ReleaseTemporaryVariable(ctx.type, &ctx.bc);
++							// Release temporary variables used by expression
++							ReleaseTemporaryVariable(ctx.type, &ctx.bc);
+ 
+-						ProcessDeferredParams(&ctx);
++							ProcessDeferredParams(&ctx);
+ 
+-						bcInit.AddCode(&ctx.bc);
++							bcInit.AddCode(&ctx.bc);
++						}
+ 					}
+ 				}
+ 			}
+@@ -10391,6 +10440,22 @@ int asCCompiler::CompileCondition(asCScriptNode *expr, asCExprContext *ctx)
+ 				return -1;
+ 			}
+ 
++			// Scoped types don't support handles, so when one expression is the handle a factory call produced and the other
++			// is a value of the same type, the handle is treated as the value rather than taking a handle to the value
++			if (le.type.dataType.IsObjectHandle() != re.type.dataType.IsObjectHandle() && le.type.dataType.GetTypeInfo() && le.type.dataType.GetTypeInfo() == re.type.dataType.GetTypeInfo() && (le.type.dataType.GetTypeInfo()->flags & asOBJ_SCOPED))
++			{
++				asCExprContext *handleExpr = le.type.dataType.IsObjectHandle() ? &le : &re;
++				// A variable on the heap holds the same pointer whether it is typed as a handle or as the object, so only the type changes
++				if (handleExpr->type.isVariable && !handleExpr->type.dataType.IsReference())
++					handleExpr->type.dataType.MakeHandle(false);
++				else
++				{
++					asCDataType dt = handleExpr->type.dataType;
++					dt.MakeHandle(false);
++					ImplicitConversion(handleExpr, dt, handleExpr == &le ? cexpr->next : cexpr->next->next, asIC_IMPLICIT_CONV);
++				}
++			}
++
+ 			// Try to perform an implicit cast to make the two operands of the same type
+ 			// Choose the conversion that is the least costly
+ 			if (le.type.dataType != re.type.dataType)
+@@ -10620,6 +10685,14 @@ int asCCompiler::CompileCondition(asCScriptNode *expr, asCExprContext *ctx)
+ 					temp.dataType.MakeReference(false);
+ 					temp.dataType.MakeReadOnly(false);
+ 
++					// Scoped types don't support handles, but a factory call produces a handle to the new object
++					// which is released right after the assignment below, so the result must be a copy of the value
++					if( temp.dataType.IsObjectHandle() && temp.dataType.GetTypeInfo() && (temp.dataType.GetTypeInfo()->flags & asOBJ_SCOPED) )
++					{
++						temp.dataType.MakeHandle(false);
++						isExplicitHandle = false;
++					}
++
+ 					// Make sure the variable isn't used in any of the expressions,
+ 					// as it would be overwritten which may cause crashes or less visible bugs
+ 					int l = int(reservedVariables.GetLength());
+@@ -13905,8 +13978,7 @@ int asCCompiler::CompileExpressionPreOp(asCScriptNode *node, asCExprContext *ctx
+ 		}
+ 		if( ctx->property_get || ctx->property_set )
+ 		{
+-			Error(TXT_INVALID_REF_PROP_ACCESS, node);
+-			return -1;
++			return ProcessPropertyIncDecAccessor(ctx, (eTokenType)op, false, node);
+ 		}
+ 		if( !ctx->type.isLValue )
+ 		{
+@@ -14392,10 +14464,11 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
+ 		return -1;
+ 	}
+ 
+-	// Property accessors on value types (or scoped references types) are not supported since
+-	// it is not possible to guarantee that the object will stay alive between the two calls
++	// Property accessors on value types (or scoped references types) are not supported by default
++	// since it is not possible to guarantee that the object will stay alive between the two calls.
++	// The application may opt-in to accept this risk via asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS.
+ 	asCScriptFunction *func = engine->scriptFunctions[lctx->property_set];
+-	if( func->objectType && (func->objectType->flags & (asOBJ_VALUE | asOBJ_SCOPED)) )
++	if( func->objectType && (func->objectType->flags & (asOBJ_VALUE | asOBJ_SCOPED)) && !engine->ep.enableValueTypedCompoundPropertyAccessors )
+ 	{
+ 		// Process the property to free the memory
+ 		ProcessPropertySetAccessor(lctx, rctx, errNode);
+@@ -14435,7 +14508,20 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
+ 	}
+ 
+ 	asCExprContext before(engine);
+-	if( func->objectType && (func->objectType->flags & (asOBJ_REF|asOBJ_SCOPED)) == asOBJ_REF )
++	bool takeExtraRef = func->objectType && (func->objectType->flags & (asOBJ_REF|asOBJ_SCOPED)) == asOBJ_REF;
++	// When compound assignment on value/scoped types has been allowed by the application (see above),
++	// the object cannot be given a protective extra reference the way ordinary reference types are
++	// below: value types have no refcounting at all, and scoped types don't permit taking a second
++	// owning reference (no AddRef). Instead the already computed address is copied into a non-owning
++	// local reference variable purely so it can be reused for the set call; this carries exactly the
++	// same risk as the script writing "obj.x = obj.x + 1" as two separate statements. Note that since
++	// this variable never owns what it points to, it must be explicitly cleared (see below) rather
++	// than released when done with it - and for scoped types (unlike value types) REFCPY's conditional
++	// release of the destination's *previous* content means that clear is mandatory, not optional: an
++	// uncleared, reused slot would otherwise be mistaken for a previously (validly) held reference and
++	// released out from under its real owner.
++	bool materializeUnsafeRef = !takeExtraRef && func->objectType && (func->objectType->flags & (asOBJ_VALUE|asOBJ_SCOPED));
++	if( takeExtraRef || materializeUnsafeRef )
+ 	{
+ 		// Keep a reference to the object in a local variable
+ 		before.bc.AddCode(&lctx->bc);
+@@ -14444,8 +14530,22 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
+ 		rctx->bc.GetVarsUsed(reservedVariables);
+ 		before.bc.GetVarsUsed(reservedVariables);
+ 
+-		asCDataType dt = asCDataType::CreateObjectHandle(func->objectType, false);
+-		int offset = AllocateVariable(dt, true);
++		asCDataType dt;
++		int offset;
++		if( takeExtraRef )
++		{
++			dt = asCDataType::CreateObjectHandle(func->objectType, false);
++			offset = AllocateVariable(dt, true);
++		}
++		else
++		{
++			// Allocate a plain (non-owning) reference variable. Being a reference rather than a
++			// handle, no destructor/release will ever be emitted for it (see CallDestructor), which
++			// is correct since we don't own the object.
++			dt = asCDataType::CreateType(func->objectType, false);
++			offset = AllocateVariable(dt, true, false, true);
++			dt.MakeReference(true);
++		}
+ 
+ 		reservedVariables.SetLength(len);
+ 
+@@ -14502,7 +14602,22 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
+ 	MergeExprBytecodeAndType(ctx, &llctx);
+ 
+ 	if( before.type.stackOffset )
+-		ReleaseTemporaryVariable(before.type.stackOffset, &ctx->bc);
++	{
++		if( takeExtraRef )
++			ReleaseTemporaryVariable(before.type.stackOffset, &ctx->bc);
++		else
++		{
++			// This variable never owned the reference it aliased (see above), so it must not be
++			// released - instead it is explicitly cleared to null. This matters for value types only
++			// for hygiene (their memory is otherwise left with a stale, meaningless pointer), but for
++			// scoped types it is required for correctness: the variable's slot may be reused by a
++			// later, unrelated compound assignment, and if it were left holding a non-null value,
++			// that later use's REFCPY would mistake it for a previously (validly) held reference and
++			// release it out from under its real owner.
++			ctx->bc.InstrSHORT(asBC_ClrVPtr, (short)before.type.stackOffset);
++			DeallocateVariable(before.type.stackOffset);
++		}
++	}
+ 
+ 	MergeExprBytecode(ctx, &before);
+ 	ProcessDeferredParams(ctx);
+@@ -14510,6 +14625,196 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
+ 	return 0;
+ }
+ 
++// Prefix/postfix ++ and -- on property accessors are essentially compound assignment (x += 1 or
++// x -= 1) with a synthesized constant 1, and so are subject to the exact same requirements and
++// limitations as ProcessPropertyGetSetAccessor above (both get and set accessors are required, and
++// value/scoped types require the application to opt-in via
++// asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS).
++//
++// Unlike compound assignment, both the *old* (pre-update) and *new* (post-update) value are needed
++// here - postfix returns the old value, prefix returns the new one - so this doesn't simply delegate
++// to ProcessPropertyGetSetAccessor (whose own result reflects whatever the set accessor call itself
++// returns, typically nothing usable, since setters are usually declared to return void). Instead the
++// get accessor is called exactly once, its result kept in its own temporary (the eventual old-value
++// result), the new value computed from that, and finally the set accessor called with the new value -
++// mirroring the address materialization/reuse done in ProcessPropertyGetSetAccessor (see there for
++// the full rationale) so that value/scoped types are supported under the same conditions.
++int asCCompiler::ProcessPropertyIncDecAccessor(asCExprContext *ctx, eTokenType op, bool isPostFix, asCScriptNode *errNode)
++{
++	asASSERT( op == ttInc || op == ttDec );
++
++	if( ctx->property_arg != 0 )
++	{
++		ProcessPropertyGetAccessor(ctx, errNode);
++		Error(TXT_COMPOUND_ASGN_WITH_IDX_PROP, errNode);
++		return -1;
++	}
++
++	if( ctx->property_set == 0 || ctx->property_get == 0 )
++	{
++		ProcessPropertyGetAccessor(ctx, errNode);
++		Error(TXT_COMPOUND_ASGN_REQUIRE_GET_SET, errNode);
++		return -1;
++	}
++
++	asCScriptFunction *func = engine->scriptFunctions[ctx->property_set];
++	if( func->objectType && (func->objectType->flags & (asOBJ_VALUE | asOBJ_SCOPED)) && !engine->ep.enableValueTypedCompoundPropertyAccessors )
++	{
++		ProcessPropertyGetAccessor(ctx, errNode);
++		Error(TXT_INVALID_REF_PROP_ACCESS, errNode);
++		return -1;
++	}
++
++	asCExprContext result(engine);
++
++	// Materialize the object's address into a local variable exactly like ProcessPropertyGetSetAccessor
++	// does internally (see there for the full rationale), so it can safely be reused: once for the get
++	// call below, and again further down for the set call. Note that unlike a plain resolved value,
++	// ctx must keep carrying real bytecode (a fresh PSF instruction, in the materialized case) up until
++	// the get call below actually consumes it to build the call.
++	bool takeExtraRef = func->objectType && (func->objectType->flags & (asOBJ_REF|asOBJ_SCOPED)) == asOBJ_REF;
++	bool materializeUnsafeRef = !takeExtraRef && func->objectType && (func->objectType->flags & (asOBJ_VALUE|asOBJ_SCOPED));
++	int materializedOffset = 0;
++	if( takeExtraRef || materializeUnsafeRef )
++	{
++		asCExprContext before(engine);
++		before.bc.AddCode(&ctx->bc);
++
++		asUINT len = reservedVariables.GetLength();
++		before.bc.GetVarsUsed(reservedVariables);
++
++		asCDataType dt;
++		int offset;
++		if( takeExtraRef )
++		{
++			dt = asCDataType::CreateObjectHandle(func->objectType, false);
++			offset = AllocateVariable(dt, true);
++		}
++		else
++		{
++			dt = asCDataType::CreateType(func->objectType, false);
++			offset = AllocateVariable(dt, true, false, true);
++			dt.MakeReference(true);
++		}
++
++		reservedVariables.SetLength(len);
++
++		if( ctx->property_ref )
++			before.bc.Instr(asBC_RDSPtr);
++		before.bc.InstrSHORT(asBC_PSF, (short)offset);
++		before.bc.InstrPTR(asBC_REFCPY, func->objectType);
++		before.bc.Instr(asBC_PopPtr);
++
++		if( ctx->type.isTemporary )
++		{
++			asSDeferredParam deferred;
++			deferred.origExpr = 0;
++			deferred.argInOutFlags = asTM_INREF;
++			deferred.argNode = 0;
++			deferred.argType.SetVariable(ctx->type.dataType, ctx->type.stackOffset, true);
++			before.deferredParams.PushLast(deferred);
++		}
++
++		// ctx keeps a fresh, single PSF instruction, ready to be consumed by the get call below
++		ctx->bc.InstrSHORT(asBC_PSF, (short)offset);
++		ctx->type.SetVariable(dt, offset, true);
++		ctx->property_ref = true;
++		ctx->type.isTemporary = false;
++		materializedOffset = offset;
++
++		result.bc.AddCode(&before.bc);
++		for( asUINT n = 0; n < before.deferredParams.GetLength(); n++ )
++			result.deferredParams.PushLast(before.deferredParams[n]);
++	}
++
++	// Keep the (now safely reusable) property/address information for the set call further down,
++	// before it gets consumed/cleared by fetching the current value below
++	asCExprContext llctx(engine);
++	llctx.type            = ctx->type;
++	llctx.property_arg    = ctx->property_arg;
++	llctx.property_const  = ctx->property_const;
++	llctx.property_get    = ctx->property_get;
++	llctx.property_handle = ctx->property_handle;
++	llctx.property_ref    = ctx->property_ref;
++	llctx.property_set    = ctx->property_set;
++
++	// Fetch the current value (the single call to the get accessor), using whatever addressing
++	// bytecode ctx currently carries (either the fresh PSF from materialization above, or its
++	// original, untouched addressing bytecode if no materialization was needed)
++	if( ProcessPropertyGetAccessor(ctx, errNode) < 0 )
++		return -1;
++
++	if( !ctx->type.dataType.IsPrimitive() )
++	{
++		Error(TXT_ILLEGAL_OPERATION, errNode);
++		return -1;
++	}
++
++	// Preserve the fetched value in its own temporary, independent from whatever the operator
++	// computation below does with it, since it may be the result of the whole expression (postfix)
++	ConvertToTempVariable(ctx);
++	asCExprValue oldValue = ctx->type;
++	ctx->type.isTemporary = false;
++	result.bc.AddCode(&ctx->bc);
++
++	// Compute the new value from the old one
++	asCExprContext one(engine);
++	one.type.SetConstantDW(asCDataType::CreatePrimitive(ttInt, true), 1);
++	asCExprContext newValue(engine);
++	if( CompileOperator(errNode, ctx, &one, &newValue, op == ttInc ? ttPlus : ttMinus, false) < 0 )
++		return -1;
++
++	// Preserve the new value in its own temporary too, independent from the argument-passing below
++	// (which would otherwise release its temp variable as soon as it's been passed to the set
++	// accessor), since it may be the result of the whole expression (prefix)
++	ConvertToTempVariable(&newValue);
++	asCExprValue newValueType = newValue.type;
++	newValue.type.isTemporary = false;
++
++	// If the address was materialized above it must be reused (a fresh instruction is needed each
++	// time, since bytecode - unlike the plain metadata above - cannot simply be copied/shared)
++	if( takeExtraRef || materializeUnsafeRef )
++		llctx.bc.InstrSHORT(asBC_PSF, (short)materializedOffset);
++
++	// Write the new value back through the set accessor
++	if( ProcessPropertySetAccessor(&llctx, &newValue, errNode) < 0 )
++		return -1;
++	MergeExprBytecode(&result, &llctx);
++
++	// Release (or clear, for the non-owning value/scoped case) our own materialized address variable,
++	// exactly as ProcessPropertyGetSetAccessor does for its own (single) use of the same pattern
++	if( takeExtraRef || materializeUnsafeRef )
++	{
++		if( takeExtraRef )
++			ReleaseTemporaryVariable(materializedOffset, &result.bc);
++		else
++		{
++			result.bc.InstrSHORT(asBC_ClrVPtr, (short)materializedOffset);
++			DeallocateVariable(materializedOffset);
++		}
++	}
++
++	// Release whichever of the old/new values isn't going to be the result of the expression
++	if( isPostFix )
++	{
++		ReleaseTemporaryVariable(newValueType.stackOffset, &result.bc);
++		oldValue.isTemporary = true;
++		result.type = oldValue;
++	}
++	else
++	{
++		ReleaseTemporaryVariable(oldValue.stackOffset, &result.bc);
++		newValueType.isTemporary = true;
++		result.type = newValueType;
++	}
++
++	ProcessDeferredParams(&result);
++
++	MergeExprBytecodeAndType(ctx, &result);
++
++	return 0;
++}
++
+ int asCCompiler::ProcessPropertyGetAccessor(asCExprContext *ctx, asCScriptNode *node)
+ {
+ 	// If no property accessor has been prepared then don't do anything
+@@ -14676,8 +14981,7 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
+ 		}
+ 		if( ctx->property_get || ctx->property_set )
+ 		{
+-			Error(TXT_INVALID_REF_PROP_ACCESS, node);
+-			return -1;
++			return ProcessPropertyIncDecAccessor(ctx, (eTokenType)op, true, node);
+ 		}
+ 		if( !ctx->type.isLValue )
+ 		{
+diff --git a/sdk/angelscript/source/as_compiler.h b/sdk/angelscript/source/as_compiler.h
+index 9169f508..d7f50f3c 100644
+--- a/sdk/angelscript/source/as_compiler.h
++++ b/sdk/angelscript/source/as_compiler.h
+@@ -317,6 +317,7 @@ class asCCompiler
+ 
+ 	void CompileInitList(asCExprValue *var, asCScriptNode *node, asCByteCode *bc, int isVarGlobOrMem);
+ 	int  CompileInitListElement(asSListPatternNode *&patternNode, asCScriptNode *&valueNode, int bufferTypeId, short bufferVar, asUINT &bufferSize, asCByteCode &byteCode, int &elementsInSubList);
++	void CompileInitListScopedElement(asCDataType &type, asCExprContext *arg, short bufferVar, asUINT bufferSize, asCScriptNode *node, asCByteCode &byteCode);
+ 	int  CompileAnonymousInitList(asCScriptNode *listNode, asCExprContext *ctx, const asCDataType &dt);
+ 
+ 	int  CallDefaultConstructor(const asCDataType &type, int offset, bool isObjectOnHeap, asCByteCode *bc, asCScriptNode *node, EVarGlobOrMem isVarGlobOrMem = asVGM_VARIABLE, bool derefDest = false);
+@@ -337,6 +338,7 @@ class asCCompiler
+ 	int  ProcessPropertyGetAccessor(asCExprContext *ctx, asCScriptNode *node);
+ 	int  ProcessPropertySetAccessor(asCExprContext *ctx, asCExprContext *arg, asCScriptNode *node);
+ 	int  ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprContext *lctx, asCExprContext *rctx, eTokenType op, asCScriptNode *errNode);
++	int  ProcessPropertyIncDecAccessor(asCExprContext *ctx, eTokenType op, bool isPostFix, asCScriptNode *errNode);
+ 	int  FindPropertyAccessor(const asCString &name, asCExprContext *ctx, asCScriptNode *node, asSNameSpace *ns, bool isThisAccess = false);
+ 	int  FindPropertyAccessor(const asCString &name, asCExprContext *ctx, asCExprContext *arg, asCScriptNode *node, asSNameSpace *ns, bool isThisAccess = false);
+ 	void PrepareTemporaryVariable(asCScriptNode *node, asCExprContext *ctx, bool forceOnHeap = false, bool forceValueCopy = false);
+diff --git a/sdk/angelscript/source/as_scriptengine.cpp b/sdk/angelscript/source/as_scriptengine.cpp
+index 14b0462d..7efd5dd1 100644
+--- a/sdk/angelscript/source/as_scriptengine.cpp
++++ b/sdk/angelscript/source/as_scriptengine.cpp
+@@ -498,6 +498,10 @@ int asCScriptEngine::SetEngineProperty(asEEngineProp property, asPWORD value)
+ 		tok.InitJumpTable();
+ 		break;
+ 
++	case asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS:
++		ep.enableValueTypedCompoundPropertyAccessors = value ? true : false;
++		break;
++
+ 	default:
+ 		return asINVALID_ARG;
+ 	}
+@@ -630,6 +634,9 @@ asPWORD asCScriptEngine::GetEngineProperty(asEEngineProp property) const
+ 	case asEP_FOREACH_SUPPORT:
+ 		return ep.foreachSupport;
+ 
++	case asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS:
++		return ep.enableValueTypedCompoundPropertyAccessors;
++
+ 	default:
+ 		return 0;
+ 	}
+@@ -708,6 +715,7 @@ asCScriptEngine::asCScriptEngine()
+ 		ep.memberInitMode                = 1;         // 0 = pre 2.38.0, members with init expr in declaration are initialized after super(), 1 = all members initialized in beginning, except if explicitly initialized in body
+ 		ep.boolConversionMode            = 0;         // 0 = only do use opImplConv for registered value type, 1 = use also opConv in contextual conversion even for reference types
+ 		ep.foreachSupport                = true;
++		ep.enableValueTypedCompoundPropertyAccessors = false; // 0 = disabled (default), 1 = allow compound assignment through property accessors on value/scoped types
+ 	}
+ 
+ 	gc.engine = this;
+diff --git a/sdk/angelscript/source/as_scriptengine.h b/sdk/angelscript/source/as_scriptengine.h
+index 5cb21aa0..aadff768 100644
+--- a/sdk/angelscript/source/as_scriptengine.h
++++ b/sdk/angelscript/source/as_scriptengine.h
+@@ -529,6 +529,7 @@ class asCScriptEngine : public asIScriptEngine
+ 		asUINT memberInitMode;
+ 		asUINT boolConversionMode;
+ 		bool   foreachSupport;
++		bool   enableValueTypedCompoundPropertyAccessors;
+ 	} ep;
+ 
+ 	// Callbacks
