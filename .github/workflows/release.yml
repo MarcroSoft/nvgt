@@ -290,12 +290,10 @@ jobs:
     runs-on: windows-latest
     needs: generate_config
     # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
-    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    # result, so a step whose last command succeeded came out green even when the build itself had failed.
     defaults:
       run:
         shell: bash
-    env:
-      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
       with:
@@ -352,11 +350,9 @@ jobs:
         curl -H "X-Auth: ${{secrets.CIPHP}}" -s "https://nvgt.dev/ci/devlibs_update.php"
     - name: build
       run: |
-        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows build." https://ntfy.sh/nvgt || true; fi
         pip3 install scons
         choco install -y upx
         scons -s no_upx=0
-        if [ "$FORK" != "true" ]; then curl -s -d "Windows build finished." https://ntfy.sh/nvgt || true; fi
     - uses: actions/upload-artifact@v7
       with:
         name: windows_release
@@ -380,12 +376,10 @@ jobs:
     runs-on: windows-2022
     needs: ["android_build", "linux_build", "mac_build", "windows_build"]
     # Windows steps run in bash like the other jobs (bash -e -o pipefail): in pwsh only a step's last command set its
-    # result, and these steps end in a ntfy notification, so a failing build still came out green.
+    # result, so a step whose last command succeeded came out green even when the build itself had failed.
     defaults:
       run:
         shell: bash
-    env:
-      FORK: ${{ github.event.repository.fork }}
     steps:
     - uses: actions/checkout@v5
     - uses: actions/download-artifact@v8
@@ -396,7 +390,6 @@ jobs:
         python3 build/ci_set_version.py
     - name: package
       run: |
-        if [ "$FORK" != "true" ]; then curl -s -d "Starting Windows package." https://ntfy.sh/nvgt || true; fi
         rm -r release
         mv windows_release release
         cd doc
@@ -415,7 +408,6 @@ jobs:
         cd install
         iscc nvgt.iss
         cd ..
-        if [ "$FORK" != "true" ]; then curl -s -d "Windows package hopefully created!" https://ntfy.sh/nvgt || true; fi
     - name: sign_windows
       if: github.event.repository.fork == false
       uses: Azure/artifact-signing-action@v1
