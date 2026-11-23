@@ -61,7 +61,6 @@ Other folders:
   - Keep the fork's `REPO`/`REF`/`SHA512` lines in both AngelScript portfiles.
   - Keep the `nvgt_mac*.bin` wildcard in `install/nvgt.iss`.
   - Keep the statically linked Universal CRT on Windows. Upstream links the system UCRT, but Windows 7 lacks it, so the fork leaves the CRT flags out of `deb_rel_flags` in SConstruct (see the comment there).
-  - Keep `--ultra-brute` in `build/upx_sconscript.py`.
   - Regenerate the Sam patch when upstream bumps its AngelScript REF.
 - **Fork-only features:**
   - Lua plugin (statically linked by CI).
