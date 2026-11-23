@@ -54,10 +54,7 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
-    - name: add the lua plugin, linked statically
-      shell: bash
-      run: |
-        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        # The lua plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - id: cache_macos
       uses: actions/cache/restore@v4
@@ -143,10 +140,7 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
-    - name: add the lua plugin, linked statically
-      shell: bash
-      run: |
-        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        # The lua plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: actions/cache/restore@v4
       with:
@@ -214,10 +208,7 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
-    - name: add the lua plugin, linked statically
-      shell: bash
-      run: |
-        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        # The lua plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: actions/setup-java@v4
       with:
@@ -319,10 +310,7 @@ jobs:
         PASS="${{ secrets.NVGT_CONFIG_TRANSFER_KEY }}"
         [ -z "$PASS" ] && PASS="nvgt_fork_build_passphrase"
         openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$PASS" -in nvgt_config.h.enc -out user/nvgt_config.h
-    - name: add the lua plugin, linked statically
-      shell: bash
-      run: |
-        # The plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
+        # The lua plugin is the plugin/lua submodule (its own repository), linked into nvgt and its stubs, so no lua shared library ships.
         echo lua >> user/static_plugins
     - uses: jwlawson/actions-setup-cmake@v2
       with:
