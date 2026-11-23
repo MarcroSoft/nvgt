@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 NVGT (NonVisual Gaming Toolkit) is a cross-platform audio game engine. It wraps libraries (SDL3, miniaudio, Poco, Jolt, enet...) into an AngelScript engine. Game developers write `.nvgt` scripts and compile them into standalone products for Windows, macOS, Linux, Android and iOS. Scripts are largely compatible with the old Blastbay Gaming Toolkit (BGT).
 
-This checkout is the MarcroSoft fork (`origin`) of samtupy/nvgt (`upstream`). See "Fork notes" below.
+This checkout is the Sightless-Soundworks fork (`origin`, formerly MarcroSoft/nvgt) of samtupy/nvgt (`upstream`). See "Fork notes" below.
 
 ## Build
 
@@ -54,7 +54,7 @@ Other folders:
   - `.github/workflows/release.yml` builds every platform, caches the dependency folders keyed on `vcpkg/ports`, `vcpkg/triplets` and the vcpkg JSON files, then packages and publishes. A full rerun is needed after a failure, because `rerun --failed` cannot fetch the deleted encrypted-config artifact.
   - `angelscript_bump.yml` opens nightly PRs on the `angelscript-bump` branch. Pushes to that branch don't start `release.yml` by themselves: dispatch it with `gh workflow run release.yml --ref angelscript-bump` and set the `release build` commit status.
 
-## Fork notes (MarcroSoft/nvgt)
+## Fork notes (Sightless-Soundworks/nvgt)
 
 - **AngelScript:** the `angelscript` and `angelscript-nc` vcpkg ports track **anjo76/angelscript** master, so the nightly bump works. Upstream uses samtupy/angelscript. Sam's unmerged engine commits are carried as `samtupy-scoped-reference-types.patch` in both ports; upstream's Jolt types (scoped `vector`, `quaternion`, `aabb` and `plane`, and `asEP_ENABLE_VALUE_TYPED_COMPOUND_PROPERTY_ACCESSORS`) need them.
 - **Merging `upstream/main`:**
