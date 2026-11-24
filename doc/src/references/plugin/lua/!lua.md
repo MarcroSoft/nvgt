@@ -1,0 +1,119 @@
+# lua
+
+This plugin embeds the Lua 5.5 scripting language into NVGT, letting you write most or all of your game in Lua while a small AngelScript loader boots it. Instead of hand-binding each function, the plugin walks the AngelScript engine's registration tables at runtime and exposes everything it finds — global functions, enums, global properties and object types with their methods, properties and operators — so nearly the entire NVGT API is callable from Lua automatically, including anything registered by other loaded plugins.
+
+## Usage
+
+```angelscript
+#pragma plugin lua
+
+void main() {
+	lua_state@ L = lua_state();
+	L.open_libraries(); // standard Lua libraries
+	L.expose_nvgt(); // expose NVGT's API; pass false to only create the nvgt table without the global fallback
+	if (!L.exec_file("game.lua")) alert("error", L.last_error);
+}
+```
+
+On the Lua side, NVGT's API lives in the `nvgt` table. When `expose_nvgt(true)` is used (the default), unknown globals also fall back to it, so both `nvgt.screen_reader_speak("hello")` and `screen_reader_speak("hello")` work. Lua's own globals always win over NVGT names, so Lua's `print`, `string` and `math` remain untouched; reach the NVGT equivalents through `nvgt.print`, `nvgt.string` and so on.
+
+```lua
+screen_reader_speak("Hello there!")
+local s = nvgt.sound()
+s:load("music.ogg")
+s:play_looped()
+local v = nvgt.vector(1, 2, 3) + nvgt.vector(4, 5, 6)
+println(v:length())
+wait(50)
+```
+
+Note that only what is registered with the engine itself is visible. Functions and classes written in AngelScript includes such as speech.nvgt (`speak` and friends) live in the compiled script module, not the engine, so they cannot be called from Lua; use the underlying registered functions like `screen_reader_speak` and `tts_voice` instead.
+
+## lua_state members
+
+* `void open_libraries()`: opens Lua's standard libraries. `require` is game-local: it searches `package.preload` and the working directory (`./?.lua`, `./?.ois`, `./?/init.lua`, `./?/init.ois`) only — no machine-wide Lua installs, and C module loading is disabled (binary modules built against a standalone Lua wouldn't be ABI compatible with the embedded interpreter). `.ois` files are searched alongside `.lua` ones and loaded as ordinary Lua chunks, so a module can be named `foo.ois` just as well as `foo.lua`. Extend `package.path` from Lua if you need more.
+* `void expose_nvgt(bool as_globals = true)`: installs the NVGT bridge.
+* `bool exec(const string&in code, const string&in chunkname = "")`: run a string of Lua code.
+* `bool exec_file(const string&in filename)`: run a Lua file (path is relative to the working directory).
+* `bool call(const string&in function_name)`: call a global Lua function without arguments.
+* `bool set_pack(const ?&in pack)`: load Lua code from an NVGT pack, given as a `pack_file` object or handle (the parameter is a variable type only because compiled games register plugins before NVGT's own types, so the declaration can't name `pack_file`; anything else is rejected with an error in `last_error`). Afterwards `exec_file`, `require`, `loadfile` and `dofile` look in the pack first and fall back to the disk, so a game can ship its Lua code inside a pack (as source or as bytecode precompiled with `lua_compile`) — including one embedded with `#pragma embed`. `require` resolves modules through `package.path` as usual, with paths taken relative to the pack root. The pack is also available to Lua as `package.pack`, so game code can call `package.pack:file_exists(name)`, `list_files()` or `get_file(name):read()` for its own data. Pass null to go back to loading from the disk only. Requires `open_libraries` and `expose_nvgt`. Only Lua loading is affected: `io.open` still reads the disk, and sounds come from the pack only if you also set `sound_default_pack`.
+
+```angelscript
+pack_file game_data;
+game_data.open("game.dat"); // or game_data.open("*") with #pragma embed game.dat
+sound_default_pack = game_data;
+L.set_pack(game_data);
+L.exec_file("main.lua");
+```
+* `string last_error`: message of the last failed exec/exec_file/call.
+* `lua_status last_error_code`: Lua status of the last failed exec/exec_file/call — LUA_OK, LUA_ERRRUN, LUA_ERRSYNTAX, LUA_ERRMEM, LUA_ERRERR or LUA_ERRFILE. A syntax or file error means the code never started running; a runtime error means it failed partway through, so globals may have been modified. call reports a missing function as LUA_ERRRUN.
+* `set_global_number/set_global_string/set_global_bool(const string&in name, value)`: set a Lua global.
+* `get_global_number/get_global_string/get_global_bool(const string&in name)`: read a Lua global.
+* `bool set_global(const string&in name, const ?&in value)`: store any NVGT value in a Lua global — numbers, strings, enums, objects and handles. Requires expose_nvgt. Reference types are shared with Lua; value types are copied. Function handles (funcdefs) become directly callable from Lua — `handler@ h = @my_func; L.set_global("boom", @h);` lets Lua call `boom(2, 3)`, and delegates like `handler(obj.method)` work too.
+* `bool get_global(const string&in name, ?&out value)`: read a Lua global into an AngelScript variable of matching type, e.g. `sound@ s; L.get_global("music", @s);`. Returns false and sets last_error on a type mismatch; a nil global reads back as a null handle. A plain Lua table global reads directly into an `array<T>@` (element type taken from the handle) or `dictionary@`, converting the same way tables do when passed to functions.
+* Global function `string lua_version()` returns the embedded Lua release.
+* Global function `string lua_compile(const string&in source, const string&in chunkname = "", bool strip = false)` compiles Lua source code to bytecode and returns it. `chunkname` follows Lua's convention as in `exec`: `@main.lua` makes errors read `main.lua:12:`. The chunk is not run. A syntax error raises a script exception with Lua's message. With `strip` set, debug information (line numbers, local names) is left out, which makes the bytecode smaller but error messages less useful.
+* Global function `void lua_compile_file(const string&in input, const string&in output, bool strip = false)` compiles the Lua file `input` and writes its bytecode to `output`, with `@` plus the input path as the chunk name. Errors raise a script exception.
+
+Bytecode loads anywhere source does — `exec`, `exec_file`, `require`, `load`, `loadfile`, `dofile` and through `set_pack` — and an `.lua` or `.ois` file may contain either. It must come from the same Lua release (see `lua_version`).
+
+## Conversions and helpers
+
+* Numbers, strings, booleans and enums convert automatically in both directions; enum constants are available by name, e.g. `nvgt.KEY_RETURN`.
+* Wrapped NVGT containers are 0-based from Lua, as they are in AngelScript: `arr[0]` is the first element, and `for i = 0, #arr - 1 do` walks the whole thing. This keeps `[]` agreeing with the methods and functions that take or return an index — `insert_at`, `remove_at`, `find`, `sound_output_device`, `tts_voice:set_voice` — all of which count from 0 and are handed through unchanged. Out of range raises the container's own exception rather than reading back `nil`, so `ipairs` raises on an NVGT array rather than walking it; convert with `nvgt.totable(arr)` first if you want a plain 1-based Lua table. A negative index counts from the end, as NVGT's array itself does — `arr[-1]` is the last element, not an error. `arr[i] = v` assigns through the element reference (primitives, enums and strings); NVGT arrays don't grow on assignment, use `arr.insert_last(v)`.
+* NVGT objects appear in Lua as userdata: call methods with `:`, access properties and fields with `.`, index with `[]` (0-based, like AngelScript), and use `#`, `+`, `-`, `*`, `/`, `%`, unary minus and comparisons where the type implements the matching AngelScript operator methods.
+* Construct objects by calling the type: `nvgt.sound()`, `nvgt.vector(1, 2, 3)`.
+* `nvgt.toarray(table, "int")` converts a Lua sequence to an NVGT array (element type deduced from the first element when omitted); `nvgt.totable(array)` converts back; `nvgt.todict(table)` builds a dictionary from a string-keyed table. Plain Lua tables are also converted automatically when passed where a function expects an array or dictionary.
+* Global properties that NVGT implements as accessors read and write by name, as in AngelScript: `DIRECTORY_TEMP`, `sound_output_device`, `MOUSE_X`. Assign through the nvgt table (`nvgt.sound_output_device = 1`), since assigning a bare global creates a Lua variable instead.
+* `nvgt.api_names()` returns an array of every name the bridge can resolve (functions, types, enum constants and global properties). The nvgt table fills lazily so pairs() cannot enumerate it; use this to whitelist NVGT's API in tools like luacheck.
+* Functions with trailing `&out` parameters return those as extra Lua return values.
+* Sound and mixer `pan` and `volume` behave exactly as they do in AngelScript, with no scale translation: on the default engine (which sets `PERCENTAGE_ATTRIBUTES`) both are BGT-style db. If you would rather work in raw linear values, convert explicitly with the `pan_linear_to_db` / `pan_db_to_linear` and `volume_linear_to_db` / `volume_db_to_linear` global functions, e.g. `snd.pan = pan_linear_to_db(0.5)` to place a sound halfway to the right, or `local amp = volume_db_to_linear(snd.volume)`.
+* Objects cross the boundary in both directions through `set_global`/`get_global`: a sound created in Lua can be fetched into a `sound@` in AngelScript and vice versa, with both sides holding references to the same object.
+
+## Running Oidua code
+
+[Oidua](https://github.com/MarcroSoft/Oidua) is another Lua audio game engine. Its API is BGT's, which NVGT renamed in many places, so Oidua code does not run here as it stands. `compat/oidua.lua` closes as much of that gap as can be closed from Lua; copy it next to your game's sources and start with:
+
+```lua
+require("oidua").install()
+```
+
+That gives Oidua's `array` and `dictionary` (reimplemented in plain Lua, since NVGT's are typed AngelScript templates), BGT's names for functions and constants NVGT renamed (`show_game_window`, `clipboard_copy_text`, `screen_reader_name`, `string_hash`, `KEY_LCONTROL`, `KEY_NUMPAD0`, `EVENT_RECEIVE`, `MOUSE_LEFT`, `DIRECTORY_MY_DOCUMENTS` and so on), and Oidua's arguments and return values where they differ: lists from `find_files`, `keys_pressed` and friends come back as Lua tables counting from 1, sound devices count from 1, `screen_reader_speak` queues unless told to interrupt, and `run` and `vector` take Oidua's shorter argument lists.
+
+What it cannot cover:
+* Methods on NVGT objects keep NVGT's signatures and conventions: `network:connect` takes no channel count, `tone_synth:freq` takes one number rather than a list, `get_voice_names` and `get_peer_list` return 0-based arrays, `calendar:set` raises on an invalid date, and a `sound` or `file` with nothing open reads back `nan` or raises rather than Oidua's defaults.
+* The key constants carry NVGT's (SDL's) numbers, not BGT's, so key codes saved by one engine mean other keys in the other.
+* Oidua's `settings` and `instance` objects, its key hook and its callbacks (`pathfinder:set_callback_function`) have no counterpart here.
+* Pack files, encryption and `string_compress` produce different bytes in the two engines.
+
+## Limitations
+
+* Lua functions cannot yet be passed where NVGT expects a callback (funcdef); such parameters are rejected with a clear error.
+* A lua_state is not thread safe; create one per thread if needed.
+* Functions and classes declared in .nvgt files (including standard includes like speech.nvgt) are not visible to Lua, only what is registered with the engine.
+* Reading dictionary values from Lua requires going through functions that return concrete types; `nvgt.totable` only accepts arrays.
+
+## Statically linked
+
+In this build of NVGT the plugin is linked statically into nvgt and its stubs on every platform, so games need no lua shared library and `#pragma plugin lua` finds it without one. Compiled games include the full Lua, compiler and all, so they run Lua source just like nvgt does.
+
+Precompiling is optional: it saves compiling the code each time the game starts and keeps the plain source out of what you ship. A small build script that compiles the Lua files into a pack before you compile the game is enough:
+
+```angelscript
+#pragma plugin lua
+
+void main() {
+	pack_file p;
+	p.create("game.dat");
+	string[]@ files = find_files("lua/*.lua");
+	for (uint i = 0; i < files.length(); i++)
+		p.add_memory(files[i], lua_compile(file_get_contents("lua/" + files[i]), "@" + files[i]));
+	p.close();
+}
+```
+
+The game then embeds `game.dat` with `#pragma embed`, calls `set_pack` and loads its Lua as before.
+
+## Remarks
+
+Lua is compiled into the plugin itself, so it has no external dependencies. The plugin is developed at [MarcroSoft/nvgt_lua](https://github.com/MarcroSoft/nvgt_lua). Lua is distributed under the MIT license; the attribution is included in NVGT's third party code attributions document.
