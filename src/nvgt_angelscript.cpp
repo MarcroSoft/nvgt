@@ -237,7 +237,7 @@ private:
 		char c;
 		if (stream->Read(&c, 1) != 1)
 			return char_traits::eof();
-		return c;
+		return char_traits::to_int_type(c); // A plain char would sign extend a 0xff byte into eof(), ending the stream partway through the header.
 	}
 	int writeToDevice(char c) { return stream->Write(&c, 1); }
 	NVGTBytecodeStream* stream;
@@ -975,9 +975,8 @@ int PragmaCallback(const string &pragmaText, CScriptBuilder &builder, void* /*us
 		builder.DefineWord(Poco::format("plugin_%s", plugin_name).c_str());
 	} else if (cleanText.starts_with("compiled_basename ")) {
 		string bn = cleanText.substr(18);
-		if (bn == "*")
-			bn.clear();
-		config.setString("build.output_basename", bn);
+		if (bn == "*") config.remove("build.output_basename");
+		else config.setString("build.output_basename", bn);
 	} else if (cleanText.starts_with("bytecode_compression ")) {
 		g_bcCompressionLevel = strtol(cleanText.substr(21).c_str(), NULL, 10);
 		if (g_bcCompressionLevel < 0 || g_bcCompressionLevel > 9)
