@@ -1,8 +1,8 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO anjo76/angelscript
-    REF 5f687a387d2917c9db9b47119a625f6e5a5732d5
-    SHA512 cb2470a727e6584e8023dc3b4a5e16e65dd16de1be09fca02c574feca656740620b7637d485c28ae8323b3b85d011ef989d1bb738941566dbe8cdfadc75113e3
+    REF d0f4fbdd3fc5e5366250d65edeba43b629e10069
+    SHA512 510afdf98e79afa983de894df5582767d0598bd624d7a208bc0ebd3561febfc8a14d261f9679767f7c1362f9ad3c5e9cf68f136f241055e9c76f50e4a070e3df
     HEAD_REF master
     PATCHES
         mark-threads-private.patch
